@@ -49,6 +49,10 @@ class ConversationOut(BaseModel):
         from_attributes = True
 
 
+class ConversationRenameIn(BaseModel):
+    title: str
+
+
 class MessageOut(BaseModel):
     id: str
     role: str
@@ -294,4 +298,22 @@ async def delete_conversation(
         raise HTTPException(status_code=404, detail="對話不存在")
     await db.delete(conv)
     await db.commit()
+
+
+@router.patch("/conversations/{conv_id}", response_model=ConversationOut)
+async def rename_conversation(
+    conv_id: str,
+    body: ConversationRenameIn,
+    current_user: CurrentUser = None,
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(Conversation).where(Conversation.id == conv_id))
+    conv = result.scalar_one_or_none()
+    if conv is None:
+        raise HTTPException(status_code=404, detail="對話不存在")
+    conv.title = body.title[:100]
+    await db.commit()
+    await db.refresh(conv)
+    return ConversationOut(id=conv.id, title=conv.title, created_at=conv.created_at.isoformat())
 

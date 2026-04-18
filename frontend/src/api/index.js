@@ -184,15 +184,18 @@ export const systemSettingsApi = {
 }
 
 // Chat stream returns raw response for ReadableStream processing
-export async function chatStream(query, conversationId, model) {
+export async function chatStream(query, conversationId, model, signal = null, docIds = []) {
   const auth = useAuthStore()
+  const body = { query, conversation_id: conversationId, model }
+  if (docIds && docIds.length) body.doc_ids = docIds
   return fetch('/api/chat/stream', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       ...(auth.token ? { 'Authorization': `Bearer ${auth.token}` } : {}),
     },
-    body: JSON.stringify({ query, conversation_id: conversationId, model }),
+    body: JSON.stringify(body),
+    ...(signal ? { signal } : {}),
   })
 }
 
@@ -200,4 +203,16 @@ export const conversationsApi = {
   list: () => fetch('/api/chat/conversations', { headers: getHeaders(false) }).then(handleResponse),
   get: (id) => fetch(`/api/chat/conversations/${id}`, { headers: getHeaders(false) }).then(handleResponse),
   delete: (id) => fetch(`/api/chat/conversations/${id}`, { method: 'DELETE', headers: getHeaders(false) }).then(handleResponse),
+  rename: (id, title) => fetch(`/api/chat/conversations/${id}`, {
+    method: 'PATCH', headers: getHeaders(),
+    body: JSON.stringify({ title }),
+  }).then(handleResponse),
+}
+
+export const agentApi = {
+  run: (instruction, model) => fetch('/api/agent/run', {
+    method: 'POST', headers: getHeaders(),
+    body: JSON.stringify({ instruction, model }),
+  }).then(handleResponse),
+  getTask: (taskId) => fetch(`/api/agent/tasks/${taskId}`, { headers: getHeaders(false) }).then(handleResponse),
 }
