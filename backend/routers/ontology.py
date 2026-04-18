@@ -221,9 +221,15 @@ async def get_graph(
     neo4j_session=Depends(get_neo4j_session),
     current_user: CurrentUser = None,
 ):
-    """? Cytoscape.js ?舐??{nodes, edges} 蝯?"""
+    """回傳 {nodes, edges}，節點含 degree weight，邊含聚合 weight"""
     nodes_result = await neo4j_session.run(
-        "MATCH (e:Entity) RETURN e.name AS name, e.type AS type, e.description AS description LIMIT $limit",
+        """
+        MATCH (e:Entity)
+        OPTIONAL MATCH (e)-[r]-()
+        RETURN e.name AS name, e.type AS type, e.description AS description,
+               count(r) AS degree
+        LIMIT $limit
+        """,
         limit=limit,
     )
     nodes_data = await nodes_result.data()
@@ -231,7 +237,8 @@ async def get_graph(
     edges_result = await neo4j_session.run(
         """
         MATCH (a:Entity)-[r]->(b:Entity)
-        RETURN a.name AS source, b.name AS target, type(r) AS rel_type
+        WITH a.name AS source, b.name AS target, type(r) AS rel_type, count(*) AS weight
+        RETURN source, target, rel_type, weight
         LIMIT $limit
         """,
         limit=limit,
@@ -241,7 +248,8 @@ async def get_graph(
     doc_edges_result = await neo4j_session.run(
         """
         MATCH (d:Document)-[:MENTIONS]->(e:Entity)
-        RETURN d.id AS doc_id, d.title AS doc_title, e.name AS entity_name
+        WITH d, e, count(*) AS weight
+        RETURN d.id AS doc_id, d.title AS doc_title, e.name AS entity_name, weight
         LIMIT $limit
         """,
         limit=limit,
@@ -250,27 +258,28 @@ async def get_graph(
 
     nodes = [
         {"data": {"id": n["name"], "label": n["name"], "type": n.get("type", "Entity"),
-                  "description": n.get("description", "")}}
+                  "description": n.get("description", ""), "weight": n.get("degree", 1) or 1}}
         for n in nodes_data
     ]
-    # 補充 Document 節點
     seen_docs: set[str] = set()
     for de in doc_edges_data:
         if de["doc_id"] not in seen_docs:
             nodes.append({"data": {"id": de["doc_id"], "label": de.get("doc_title", de["doc_id"]),
-                                   "type": "Document"}})
+                                   "type": "Document", "weight": 1}})
             seen_docs.add(de["doc_id"])
 
     edges = [
         {"data": {"id": f"{e['source']}->{e['target']}", "source": e["source"],
-                  "target": e["target"], "label": e.get("rel_type", "RELATED")}}
+                  "target": e["target"], "label": e.get("rel_type", "RELATED"),
+                  "weight": e.get("weight", 1)}}
         for e in edges_data
     ]
     for de in doc_edges_data:
         edges.append({"data": {"id": f"{de['doc_id']}->#{de['entity_name']}",
                                 "source": de["doc_id"], "target": de["entity_name"],
-                                "label": "MENTIONS"}})
+                                "label": "MENTIONS", "weight": de.get("weight", 1)}})
 
     return {"nodes": nodes, "edges": edges}
+
 
 

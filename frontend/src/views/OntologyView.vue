@@ -58,6 +58,35 @@
           <div ref="cyContainer" class="cy-container"></div>
         </el-tab-pane>
 
+        <!-- 3D 權重圖譜 Tab -->
+        <el-tab-pane name="3d" label="3D 權重圖譜">
+          <div class="graph-toolbar">
+            <el-button @click="load3DGraph" :loading="graph3dLoading">重新載入</el-button>
+            <span class="graph-stats">節點：{{ nodeCount }} | 邊：{{ edgeCount }}</span>
+            <span class="graph-hint">節點大小＝連結數；連結粗細＝出現頻率；拖曳旋轉</span>
+            <div style="margin-left:auto;display:flex;gap:6px;align-items:center">
+              <el-tag v-for="(c, t) in COLOR_MAP_DISPLAY" :key="t" :style="`background:${c};border-color:${c};color:#fff`" size="small">{{ t }}</el-tag>
+            </div>
+          </div>
+          <div class="graph-3d-wrap">
+            <div ref="container3d" class="container-3d"></div>
+            <div class="graph-3d-sidebar">
+              <div class="sidebar-title">🏆 高連結節點 TOP 15</div>
+              <div
+                v-for="n in topWeightNodes"
+                :key="n.id"
+                class="weight-row"
+                @click="highlight3DNode(n)"
+              >
+                <span class="weight-dot" :style="`background:${COLOR_MAP_DISPLAY[n.type] || '#909399'}`"></span>
+                <span class="weight-name" :title="n.name">{{ n.name }}</span>
+                <el-tag size="small" effect="plain">{{ n.weight }}</el-tag>
+              </div>
+              <el-empty v-if="!topWeightNodes.length" description="尚無資料" :image-size="60" />
+            </div>
+          </div>
+        </el-tab-pane>
+
         <!-- Review Queue Tab -->
         <el-tab-pane name="review">
           <template #label>
@@ -116,10 +145,15 @@
 </template>
 
 <script setup>
-import { ref, onMounted, watch, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { Close } from '@element-plus/icons-vue'
 import cytoscape from 'cytoscape'
 import { ontologyApi } from '../api/index.js'
+import ForceGraph3D from '3d-force-graph'
+
+const COLOR_MAP_DISPLAY = {
+  Entity: '#4a90d9', Document: '#67c23a', Concept: '#e6a23c',
+}
 
 const activeTab = ref('graph')
 const cyContainer = ref(null)
@@ -179,9 +213,126 @@ onMounted(async () => {
 
 watch(activeTab, (t) => {
   if (t === 'graph') loadGraph()
+  else if (t === '3d') load3DGraph()
   else if (t === 'review') loadReviewQueue()
   else if (t === 'blocklist') loadBlocklist()
 })
+
+onUnmounted(() => {
+  if (graph3d) { try { graph3d._destructor?.() } catch {} ; graph3d = null }
+})
+
+// ── 3D 圖譜 ───────────────────────────────────────────────────────────────────
+const container3d  = ref(null)
+let   graph3d      = null
+const graph3dLoading = ref(false)
+const graph3dData  = ref({ nodes: [], links: [] })
+
+const topWeightNodes = computed(() =>
+  [...graph3dData.value.nodes]
+    .sort((a, b) => (b.weight || 1) - (a.weight || 1))
+    .slice(0, 15)
+)
+
+function _toGraph3D(raw) {
+  const colorMap = { Entity: '#4a90d9', Document: '#67c23a', Concept: '#e6a23c' }
+  const nodes = (raw.nodes || []).map(n => ({
+    id: n.data.id,
+    name: n.data.label || n.data.id,
+    type: n.data.type || 'Entity',
+    weight: n.data.weight || 1,
+    description: n.data.description || '',
+    color: colorMap[n.data.type] || '#909399',
+  }))
+  const links = (raw.edges || []).map(e => ({
+    source: e.data.source,
+    target: e.data.target,
+    label: e.data.label || '',
+    weight: e.data.weight || 1,
+  }))
+  return { nodes, links }
+}
+
+async function load3DGraph() {
+  graph3dLoading.value = true
+  try {
+    // 共用已載入的 graphData，避免重複請求
+    const raw = graphData.nodes?.length ? graphData : await ontologyApi.graph()
+    if (!graphData.nodes?.length) {
+      graphData = raw
+      nodeCount.value = raw.nodes?.length || 0
+      edgeCount.value = raw.edges?.length || 0
+    }
+    graph3dData.value = _toGraph3D(raw)
+    await nextTick()
+    _init3DGraph()
+  } catch (e) {
+    console.error('3D graph error:', e)
+  } finally {
+    graph3dLoading.value = false
+  }
+}
+
+function _init3DGraph() {
+  if (!container3d.value) return
+  if (graph3d) {
+    try { graph3d._destructor?.() } catch {}
+    graph3d = null
+  }
+  container3d.value.innerHTML = ''
+
+  const w = container3d.value.clientWidth  || 800
+  const h = container3d.value.clientHeight || 560
+
+  graph3d = ForceGraph3D({ controlType: 'orbit' })(container3d.value)
+    .width(w).height(h)
+    .backgroundColor('#0f172a')
+    .graphData(graph3dData.value)
+    // 節點
+    .nodeLabel(n => `<div style="background:#1e293b;padding:4px 8px;border-radius:6px;font-size:12px;color:#e2e8f0">${n.name}<br/><span style="color:#94a3b8">${n.type} · 連結數: ${n.weight}</span></div>`)
+    .nodeColor(n => n.color)
+    .nodeVal(n => Math.max(1, Math.log2((n.weight || 1) + 1)) * 4)
+    .nodeResolution(16)
+    .nodeOpacity(0.9)
+    // 連結
+    .linkLabel(l => l.label)
+    .linkWidth(l => Math.max(0.5, Math.log2((l.weight || 1) + 1)))
+    .linkColor(l => l.label === 'MENTIONS' ? '#67c23a88' : '#4a90d988')
+    .linkOpacity(0.5)
+    .linkDirectionalArrowLength(4)
+    .linkDirectionalArrowRelPos(1)
+    .linkDirectionalParticles(l => Math.min(3, l.weight || 1))
+    .linkDirectionalParticleWidth(1.5)
+    // 互動
+    .onNodeClick(node => {
+      selectedNode.value = { id: node.id, label: node.name, type: node.type, description: node.description }
+      const relatedEdges = []
+      ;(graphData.edges || []).forEach(e => {
+        const d = e.data
+        const src = typeof d.source === 'object' ? d.source?.id : d.source
+        const tgt = typeof d.target === 'object' ? d.target?.id : d.target
+        if (src === node.id) relatedEdges.push({ dir: 'out', rel: d.label, peer: tgt })
+        else if (tgt === node.id) relatedEdges.push({ dir: 'in', rel: d.label, peer: src })
+      })
+      selectedNodeEdges.value = relatedEdges
+      nodeDialogVisible.value = true
+      nextTick(() => { nodePanelOpen.value = true })
+    })
+}
+
+function highlight3DNode(node) {
+  if (!graph3d) return
+  const found = graph3dData.value.nodes.find(n => n.id === node.id)
+  if (found) {
+    const dist = 120
+    const distRatio = 1 + dist / Math.hypot(found.x || 1, found.y || 1, found.z || 1)
+    graph3d.cameraPosition(
+      { x: (found.x || 0) * distRatio, y: (found.y || 0) * distRatio, z: (found.z || 0) * distRatio },
+      found,
+      1500
+    )
+  }
+}
 
 async function loadGraph() {
   graphLoading.value = true
@@ -479,4 +630,47 @@ function actionType(action) {
   border-radius: 10px;
   background: #fafafa;
 }
+
+/* ── 3D Graph ── */
+.graph-3d-wrap {
+  display: flex;
+  gap: 12px;
+  height: 580px;
+}
+.container-3d {
+  flex: 1;
+  min-width: 0;
+  border-radius: 10px;
+  overflow: hidden;
+  background: #0f172a;
+}
+.graph-3d-sidebar {
+  width: 200px;
+  flex-shrink: 0;
+  background: var(--el-bg-color);
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 10px;
+  padding: 12px;
+  overflow-y: auto;
+}
+.sidebar-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #666;
+  margin-bottom: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--el-border-color-lighter);
+}
+.weight-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 4px;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: background .15s;
+}
+.weight-row:hover { background: var(--el-fill-color-light); }
+.weight-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.weight-name { flex: 1; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 </style>

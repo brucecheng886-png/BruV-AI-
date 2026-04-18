@@ -215,14 +215,14 @@ PLUGIN_CATALOG = [
     {
         "key": "viz3d",
         "name": "3D 知識圖譜",
-        "description": "以 Three.js 3D force-directed graph 視覺化知識庫本體論關係（前端渲染）",
+        "description": "以 Three.js 3D force-directed graph 視覺化知識庫本體論關係，節點大小代表連結數權重",
         "icon": "🌐",
         "category": "visualization",
         "category_label": "視覺化",
         "actions": ["render"],
         "config_fields": [],
-        "ai_description": "觸發前端 3D 知識圖譜視圖。",
-        "planned": True,
+        "ai_description": "開啟知識圖譜的 3D 權重視覺化（在前端 OntologyView 的「3D 權重圖譜」分頁）。",
+        "planned": False,
     },
     {
         "key": "translation",
