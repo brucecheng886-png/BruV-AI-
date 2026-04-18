@@ -49,13 +49,25 @@
             />
             <div class="input-card-footer">
               <span class="input-hint">Enter 送出 · Shift+Enter 換行</span>
-              <el-button
-                type="primary"
-                size="small"
-                :disabled="!inputText.trim() || streaming"
-                :loading="streaming"
-                @click="sendMessage"
-              >發送</el-button>
+              <div class="footer-actions">
+                <el-select
+                  v-model="selectedModel"
+                  size="small"
+                  class="model-select"
+                  :disabled="streaming"
+                  placeholder="選擇模型"
+                  :title="selectedModel"
+                >
+                  <el-option v-for="m in availableModels" :key="m" :label="m" :value="m" />
+                </el-select>
+                <el-button
+                  type="primary"
+                  size="small"
+                  :disabled="!inputText.trim() || streaming"
+                  :loading="streaming"
+                  @click="sendMessage"
+                >發送</el-button>
+              </div>
             </div>
           </div>
         </div>
@@ -109,13 +121,25 @@
               @keydown.enter.exact.prevent="sendMessage"
               :disabled="streaming"
             />
-            <el-button
-              type="primary"
-              :disabled="!inputText.trim() || streaming"
-              :loading="streaming"
-              @click="sendMessage"
-              class="send-btn"
-            >發送</el-button>
+            <div class="bar-right">
+              <el-select
+                v-model="selectedModel"
+                size="small"
+                class="model-select"
+                :disabled="streaming"
+                placeholder="選擇模型"
+                :title="selectedModel"
+              >
+                <el-option v-for="m in availableModels" :key="m" :label="m" :value="m" />
+              </el-select>
+              <el-button
+                type="primary"
+                :disabled="!inputText.trim() || streaming"
+                :loading="streaming"
+                @click="sendMessage"
+                class="send-btn"
+              >發送</el-button>
+            </div>
           </div>
         </div>
       </template>
@@ -125,8 +149,8 @@
 </template>
 
 <script setup>
-import { ref, onMounted, nextTick } from 'vue'
-import { chatStream, conversationsApi } from '../api/index.js'
+import { ref, onMounted, onUnmounted, nextTick } from 'vue'
+import { chatStream, conversationsApi, systemSettingsApi } from '../api/index.js'
 
 const conversations = ref([])
 const currentConvId = ref(null)
@@ -134,6 +158,22 @@ const messages = ref([])
 const inputText = ref('')
 const streaming = ref(false)
 const messagesEl = ref(null)
+
+// ── 模型選擇 ──────────────────────────────────────────────
+const availableModels = ref([])
+const selectedModel = ref('')
+let modelPollTimer = null
+
+async function loadModels() {
+  try {
+    const data = await systemSettingsApi.getModels()
+    availableModels.value = data.models || []
+    // 若目前選擇的模型不在清單中（或尚未選），自動選預設
+    if (!selectedModel.value || !availableModels.value.includes(selectedModel.value)) {
+      selectedModel.value = data.default || availableModels.value[0] || ''
+    }
+  } catch {}
+}
 
 const quickPrompts = [
   { icon: '💻', label: '程式碼', text: '幫我撰寫程式：' },
@@ -151,6 +191,12 @@ onMounted(async () => {
   try {
     conversations.value = await conversationsApi.list()
   } catch {}
+  await loadModels()
+  modelPollTimer = setInterval(loadModels, 30_000)
+})
+
+onUnmounted(() => {
+  clearInterval(modelPollTimer)
 })
 
 async function selectConversation(conv) {
@@ -199,7 +245,7 @@ async function sendMessage() {
   streaming.value = true
 
   try {
-    const resp = await chatStream(text, currentConvId.value)
+    const resp = await chatStream(text, currentConvId.value, selectedModel.value || null)
     if (!resp.ok) {
       aiMsg.content = '&#9888; 請求失敗，請重試'
       aiMsg.streaming = false
@@ -507,5 +553,28 @@ async function sendMessage() {
   gap: 10px;
   align-items: flex-end;
 }
-.send-btn { height: 60px; width: 80px; flex-shrink: 0; }
+.bar-right {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  flex-shrink: 0;
+  width: 90px;
+}
+.send-btn { flex: 1; }
+
+/* 模型選擇器 */
+.footer-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.model-select { width: 150px; }
+:deep(.model-select .el-input__wrapper) {
+  border-radius: 6px;
+  padding: 0 8px;
+}
+:deep(.model-select .el-input__inner) {
+  font-size: 12px;
+}
 </style>

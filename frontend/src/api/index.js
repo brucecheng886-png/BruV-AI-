@@ -173,6 +173,8 @@ export const systemSettingsApi = {
   // 密碼修改
   changePassword: (current_password, new_password) =>
     fetch('/api/settings/user/change-password', { method: 'POST', headers: getHeaders(), body: JSON.stringify({ current_password, new_password }) }).then(handleResponse),
+  getModels: () =>
+    fetch('/api/settings/models', { headers: getHeaders(false) }).then(handleResponse),
 }
 
 // Chat stream returns raw response for ReadableStream processing
