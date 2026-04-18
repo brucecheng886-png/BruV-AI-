@@ -89,6 +89,12 @@ ALTER TABLE plugins ADD COLUMN IF NOT EXISTS plugin_type   TEXT NOT NULL DEFAULT
 ALTER TABLE plugins ADD COLUMN IF NOT EXISTS builtin_key   TEXT;
 ALTER TABLE plugins ADD COLUMN IF NOT EXISTS plugin_config JSONB NOT NULL DEFAULT '{}';
 ALTER TABLE plugins ALTER COLUMN endpoint SET DEFAULT '';
+ALTER TABLE llm_models ADD COLUMN IF NOT EXISTS model_type   TEXT NOT NULL DEFAULT 'chat';
+ALTER TABLE llm_models ADD COLUMN IF NOT EXISTS max_tokens   INT;
+ALTER TABLE llm_models ADD COLUMN IF NOT EXISTS vision_support BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE llm_models ADD COLUMN IF NOT EXISTS provider     TEXT;
+ALTER TABLE llm_models ADD COLUMN IF NOT EXISTS base_url     TEXT;
+ALTER TABLE llm_models ADD COLUMN IF NOT EXISTS api_key      TEXT;  -- Fernet 加密
 
 -- ── LLM Wiki ──────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS llm_models (

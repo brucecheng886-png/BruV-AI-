@@ -145,6 +145,7 @@ class LLMModel(Base):
     vision_support: Mapped[bool] = mapped_column(Boolean, default=False)
     provider: Mapped[str | None] = mapped_column(String(30))
     base_url: Mapped[str | None] = mapped_column(String(256))
+    api_key:  Mapped[str | None] = mapped_column(Text)            # Fernet 加密後的 API Key
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 

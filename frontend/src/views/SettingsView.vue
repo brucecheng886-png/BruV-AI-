@@ -304,8 +304,10 @@
         </el-form-item>
         <el-form-item v-if="modelForm.provider !== 'ollama'" label="API Key">
           <el-input v-model="modelForm._api_key" type="password" show-password
-            placeholder="填入 API Key（不儲存至資料庫）" />
-          <div style="font-size:11px;color:#999;margin-top:3px;">僅用於驗證，不儲存至資料庫</div>
+            :placeholder="modelForm._hasApiKey ? '「已儲存」— 輸入新金鑰可覆寫' : '填入 API Key（加密儲存）'" />
+          <div style="font-size:11px;margin-top:3px;" :style="{ color: modelForm._hasApiKey ? '#67c23a' : '#999' }">
+            {{ modelForm._hasApiKey ? '✔ 已有儲存的 API Key，筆區空白表示不變更' : '加密儲存至資料庫' }}
+          </div>
         </el-form-item>
         <el-form-item label="Max tokens">
           <el-input-number v-model="modelForm.max_tokens" :min="512" :step="1024" style="width:160px;" />
@@ -414,6 +416,7 @@ const modelForm = reactive({
   model_type: 'chat', max_tokens: null, vision_support: false,
   provider: 'ollama', base_url: '',
   _api_key: '',
+  _hasApiKey: false,   // 表示 DB 已有儲存的 API Key
 })
 
 onMounted(loadModels)
@@ -435,7 +438,7 @@ function openNewDialog() {
   Object.assign(modelForm, {
     name: '', family: '', developer: '', params_b: null,
     context_length: null, license: '', ollama_id: '', hf_id: '',
-    tags_str: '', _api_key: '',
+    tags_str: '', _api_key: '', _hasApiKey: false,
     model_type: 'chat', max_tokens: null, vision_support: false,
     provider: prov, base_url: prov === 'ollama' ? 'http://ollama:11434' : '',
   })
@@ -457,6 +460,7 @@ function openEdit(row) {
     params_b: row.params_b, context_length: row.context_length,
     license: row.license || '', ollama_id: row.ollama_id || '',
     hf_id: row.hf_id || '', tags_str: (row.tags || []).join(', '), _api_key: '',
+    _hasApiKey: row.has_api_key || false,
     model_type: row.model_type || 'chat',
     max_tokens: row.max_tokens || null,
     vision_support: row.vision_support || false,
@@ -470,6 +474,7 @@ function openEdit(row) {
 
 function onDialogClosed() {
   modelForm._api_key = ''
+  modelForm._hasApiKey = false
   editingId.value = null
   verifyStatus.value = ''
   verifyMsg.value = ''
@@ -497,6 +502,7 @@ async function verifyModel() {
       model_name: modelForm.name,
       base_url:   modelForm.base_url || null,
       api_key:    modelForm._api_key || null,
+      model_id:   editingId.value || null,   // 當 api_key 為空時從 DB 讀取已儲存的
     })
     verifyStatus.value = res.ok ? 'ok' : 'fail'
     verifyMsg.value    = res.message
@@ -517,9 +523,11 @@ async function saveModel() {
       tags: modelForm.tags_str.split(',').map(t => t.trim()).filter(Boolean),
       benchmarks: {},
       quantizations: {},
+      api_key: modelForm._api_key || null,   // null = 不變更；'' = 清除；其他 = 更新
     }
     delete body.tags_str
     delete body._api_key
+    delete body._hasApiKey
     if (editingId.value) {
       await wikiApi.update(editingId.value, body)
     } else {
