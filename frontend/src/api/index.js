@@ -30,6 +30,7 @@ async function handleResponse(resp) {
     } catch {}
     throw new Error(detail)
   }
+  if (resp.status === 204 || resp.status === 205) return null
   return resp.json()
 }
 
