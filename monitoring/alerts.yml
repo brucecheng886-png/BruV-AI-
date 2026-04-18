@@ -1,0 +1,44 @@
+groups:
+  - name: ai_kb_critical
+    rules:
+      # 任何被 Prometheus 監控的服務下線超過 2 分鐘
+      - alert: ServiceDown
+        expr: up == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "服務下線: {{ $labels.job }}"
+          description: "{{ $labels.job }} 已超過 2 分鐘無法連線。"
+
+      # Qdrant 向量庫單一 collection 超過 50 萬筆（效能預警）
+      - alert: QdrantHighPointCount
+        expr: qdrant_collections_points_total > 500000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Qdrant collection 資料量過高"
+          description: "Collection {{ $labels.collection }} 已達 {{ $value }} 筆，建議評估分片策略。"
+
+  - name: ai_kb_warning
+    rules:
+      # Prometheus 抓取失敗率超過 10%
+      - alert: HighScrapeErrorRate
+        expr: rate(scrape_samples_scraped[5m]) == 0
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Prometheus 抓取異常: {{ $labels.job }}"
+          description: "{{ $labels.job }} 連續 3 分鐘 scrape 無資料。"
+
+      # Backend HTTP 錯誤率超過 5%（需要 fastapi-prometheus-instrumentator）
+      # - alert: HighHTTPErrorRate
+      #   expr: rate(http_requests_total{status=~"5.."}[5m]) / rate(http_requests_total[5m]) > 0.05
+      #   for: 5m
+      #   labels:
+      #     severity: warning
+      #   annotations:
+      #     summary: "Backend HTTP 5xx 錯誤率過高"
+      #     description: "HTTP 5xx 比例達 {{ $value | humanizePercentage }}"

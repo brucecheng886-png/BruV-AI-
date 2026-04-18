@@ -1,0 +1,20 @@
+AI Knowledge Base Test Document
+
+This is a test document for the BruV AI Knowledge Base system.
+
+Section 1: Introduction
+The system supports RAG (Retrieval-Augmented Generation) workflows.
+Documents are chunked and embedded into a vector database (Qdrant).
+Users can query the knowledge base through a chat interface.
+
+Section 2: Features
+- Document upload and indexing (PDF, DOCX, TXT, HTML, CSV)
+- Vector search using BGE-M3 embeddings
+- Knowledge graph construction with Neo4j
+- LLM-powered chat with source citations
+
+Section 3: Architecture
+The backend is built with FastAPI and Python 3.11.
+The frontend uses Vue 3 with Element Plus components.
+Celery handles asynchronous document processing tasks.
+PostgreSQL stores document metadata and chunk content.

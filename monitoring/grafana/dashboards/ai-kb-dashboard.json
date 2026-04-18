@@ -1,0 +1,153 @@
+{
+  "id": null,
+  "uid": "ai-kb-main",
+  "title": "AI 知識庫 — 系統監控",
+  "tags": ["ai-kb"],
+  "timezone": "browser",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-1h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "title": "服務上線狀態",
+      "type": "stat",
+      "gridPos": { "x": 0, "y": 0, "w": 24, "h": 4 },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "orientation": "horizontal",
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "name"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "DOWN", "color": "red" } } },
+            { "type": "value", "options": { "1": { "text": "UP",   "color": "green" } } }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "value": null, "color": "red" },
+              { "value": 1,    "color": "green" }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "up",
+          "legendFormat": "{{ job }}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Qdrant 向量總數",
+      "type": "stat",
+      "gridPos": { "x": 0, "y": 4, "w": 6, "h": 4 },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "unit": "short"
+        }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "qdrant_collections_points_total",
+          "legendFormat": "{{ collection }}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Qdrant 向量數趨勢",
+      "type": "timeseries",
+      "gridPos": { "x": 6, "y": 4, "w": 18, "h": 4 },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" }
+      },
+      "fieldConfig": {
+        "defaults": { "unit": "short" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "qdrant_collections_points_total",
+          "legendFormat": "{{ collection }}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "服務抓取狀態歷史",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 8, "w": 12, "h": 6 },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" }
+      },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "min": 0, "max": 1 }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "up",
+          "legendFormat": "{{ job }}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Prometheus 抓取樣本數",
+      "type": "timeseries",
+      "gridPos": { "x": 12, "y": 8, "w": 12, "h": 6 },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" }
+      },
+      "fieldConfig": {
+        "defaults": { "unit": "short" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "scrape_samples_scraped",
+          "legendFormat": "{{ job }}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "容器日誌 (Loki)",
+      "type": "logs",
+      "gridPos": { "x": 0, "y": 14, "w": 24, "h": 8 },
+      "options": {
+        "dedupStrategy": "none",
+        "showLabels": false,
+        "showTime": true,
+        "wrapLogMessage": true
+      },
+      "targets": [
+        {
+          "datasource": { "type": "loki", "uid": "loki" },
+          "expr": "{job=\"docker\"}",
+          "refId": "A"
+        }
+      ]
+    }
+  ]
+}

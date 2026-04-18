@@ -1,0 +1,35 @@
+{
+  "name": "bruv-ai-kb",
+  "version": "1.0.0",
+  "description": "BruV AI 知識庫 — 桌面版",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build:win": "electron-builder --win --x64",
+    "build:mac": "electron-builder --mac"
+  },
+  "build": {
+    "appId": "com.bruv.ai-kb",
+    "productName": "BruV AI 知識庫",
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "target": "nsis",
+      "icon": "assets/icon.ico"
+    },
+    "mac": {
+      "target": "dmg",
+      "icon": "assets/icon.icns"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true
+    }
+  },
+  "devDependencies": {
+    "electron": "^30.5.1",
+    "electron-builder": "^24.0.0"
+  }
+}

@@ -1,0 +1,299 @@
+services:
+
+  # ── 反向代理 ────────────────────────────────────────────────
+  nginx:
+    build: ./frontend
+    container_name: ai_kb_nginx
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    networks:
+      - ai_kb_network
+    restart: unless-stopped
+
+  # ── 資料庫層 ────────────────────────────────────────────────
+  postgres:
+    image: postgres:16
+    container_name: ai_kb_postgres
+    env_file: .env
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init_db.sql:/docker-entrypoint-initdb.d/init_db.sql:ro
+    ports:
+      - "5432:5432"
+    networks:
+      - ai_kb_network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: ai_kb_qdrant
+    volumes:
+      - qdrant_data:/qdrant/storage
+    ports:
+      - "6333:6333"
+    networks:
+      - ai_kb_network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "cat /proc/1/status | grep -q Tgid || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  neo4j:
+    image: neo4j:5-community
+    container_name: ai_kb_neo4j
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD}
+      NEO4J_PLUGINS: '["apoc"]'
+      NEO4J_dbms_security_procedures_unrestricted: apoc.*
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    networks:
+      - ai_kb_network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:7474 || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: ai_kb_redis
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    networks:
+      - ai_kb_network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  minio:
+    image: minio/minio:latest
+    container_name: ai_kb_minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY}
+    volumes:
+      - minio_data:/data
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    networks:
+      - ai_kb_network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "mc ready local || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
+  # ── LLM 推理 ────────────────────────────────────────────────
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ai_kb_ollama
+    volumes:
+      - ollama_data:/root/.ollama
+    ports:
+      - "11434:11434"
+    networks:
+      - ai_kb_network
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 30s
+      timeout: 15s
+      retries: 5
+
+  # ── 應用程式層 ───────────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: ai_kb_backend
+    env_file: .env
+    environment:
+      - PYTHONPATH=/app
+    volumes:
+      - ./backend:/app                       # 熱重載（開發模式）
+      - ./data/saga.db:/data/saga.db         # Saga 補償日誌
+      - ./data/uploads:/data/uploads         # 暫存上傳
+      - huggingface_cache:/root/.cache/huggingface  # Re-ranker 模型快取
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+    networks:
+      - ai_kb_network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8000/api/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
+  celery-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: ai_kb_celery
+    command: celery -A tasks worker --loglevel=info --concurrency=2
+    env_file: .env
+    environment:
+      - PYTHONPATH=/app
+    volumes:
+      - ./backend:/app
+      - ./data/saga.db:/data/saga.db
+      - ./data/uploads:/data/uploads
+      - huggingface_cache:/root/.cache/huggingface
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    networks:
+      - ai_kb_network
+    restart: unless-stopped
+
+  playwright-service:
+    build:
+      context: ./playwright-service
+      dockerfile: Dockerfile
+    container_name: ai_kb_playwright
+    volumes:
+      - ./playwright-service:/app
+      - ./data/screenshots:/data/screenshots
+    networks:
+      - ai_kb_network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:3002/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
+  searxng:
+    image: searxng/searxng:latest
+    container_name: ai_kb_searxng
+    volumes:
+      - ./searxng:/etc/searxng:rw
+    ports:
+      - "8080:8080"
+    networks:
+      - ai_kb_network
+    restart: unless-stopped
+
+  # ── 監控層 ───────────────────────────────────────────────────
+  loki:
+    image: grafana/loki:latest
+    container_name: ai_kb_loki
+    ports:
+      - "3100:3100"
+    volumes:
+      - loki_data:/loki
+      - ./monitoring/loki-config.yml:/etc/loki/local-config.yaml:ro
+    command: -config.file=/etc/loki/local-config.yaml
+    networks:
+      - ai_kb_network
+    restart: unless-stopped
+
+  promtail:
+    image: grafana/promtail:latest
+    container_name: ai_kb_promtail
+    volumes:
+      - /var/log:/var/log:ro
+      - ./monitoring/promtail-config.yml:/etc/promtail/config.yml:ro
+    command: -config.file=/etc/promtail/config.yml
+    networks:
+      - ai_kb_network
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: ai_kb_prometheus
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    networks:
+      - ai_kb_network
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: ai_kb_grafana
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/grafana/dashboards/ai-kb-dashboard.json
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/etc/grafana/dashboards:ro
+    ports:
+      - "3001:3000"
+    depends_on:
+      - prometheus
+      - loki
+    networks:
+      - ai_kb_network
+    restart: unless-stopped
+
+networks:
+  ai_kb_network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  qdrant_data:
+  neo4j_data:
+  neo4j_logs:
+  redis_data:
+  minio_data:
+  ollama_data:
+  loki_data:
+  prometheus_data:
+  grafana_data:
+  huggingface_cache:
