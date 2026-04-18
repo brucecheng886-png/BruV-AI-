@@ -15,8 +15,13 @@
           :class="{ active: currentConvId === conv.id }"
           @click="selectConversation(conv)"
         >
-          <div class="conv-title">{{ conv.title }}</div>
-          <div class="conv-date">{{ conv.created_at?.slice(0,10) }}</div>
+          <div class="conv-item-body">
+            <div class="conv-title">{{ conv.title }}</div>
+            <div class="conv-date">{{ conv.created_at?.slice(0,10) }}</div>
+          </div>
+          <button class="conv-delete-btn" @click.stop="deleteConversation(conv.id)" title="刪除對話">
+            ✕
+          </button>
         </div>
       </div>
     </aside>
@@ -162,6 +167,17 @@ function newConversation() {
   messages.value = []
 }
 
+async function deleteConversation(id) {
+  try {
+    await conversationsApi.delete(id)
+    conversations.value = conversations.value.filter(c => c.id !== id)
+    if (currentConvId.value === id) {
+      currentConvId.value = null
+      messages.value = []
+    }
+  } catch {}
+}
+
 function scrollToBottom() {
   nextTick(() => {
     if (messagesEl.value) {
@@ -269,9 +285,16 @@ async function sendMessage() {
   font-size: 13px;
   margin-bottom: 2px;
   transition: background 0.12s;
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 .conv-item:hover { background: #e2e8f0; }
 .conv-item.active { background: #dbeafe; }
+.conv-item-body {
+  flex: 1;
+  min-width: 0;
+}
 .conv-title {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -281,6 +304,23 @@ async function sendMessage() {
 }
 .conv-item.active .conv-title { color: #1d4ed8; }
 .conv-date { font-size: 11px; color: #94a3b8; margin-top: 2px; }
+.conv-delete-btn {
+  flex-shrink: 0;
+  display: none;
+  width: 20px;
+  height: 20px;
+  border: none;
+  background: transparent;
+  color: #94a3b8;
+  font-size: 11px;
+  cursor: pointer;
+  border-radius: 4px;
+  line-height: 1;
+  padding: 0;
+  transition: background 0.1s, color 0.1s;
+}
+.conv-item:hover .conv-delete-btn { display: flex; align-items: center; justify-content: center; }
+.conv-delete-btn:hover { background: #fecaca; color: #dc2626; }
 
 /* Main */
 .chat-main {
