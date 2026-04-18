@@ -75,11 +75,20 @@ CREATE TABLE IF NOT EXISTS plugins (
     name            TEXT UNIQUE NOT NULL,
     description     TEXT,
     input_schema    JSONB NOT NULL DEFAULT '{}',
-    endpoint        TEXT NOT NULL,
+    plugin_type     TEXT NOT NULL DEFAULT 'webhook',  -- webhook | builtin
+    builtin_key     TEXT,                             -- notion | chart | calculator | email | rss | weather
+    plugin_config   JSONB NOT NULL DEFAULT '{}',      -- 非敏感設定（smtp_host 等）
+    endpoint        TEXT NOT NULL DEFAULT '',
     auth_header     TEXT,                   -- Fernet 加密後的字串
     enabled         BOOLEAN NOT NULL DEFAULT true,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- ── 現有 DB 升級用（新欄位 idempotent migration）────────────────
+ALTER TABLE plugins ADD COLUMN IF NOT EXISTS plugin_type   TEXT NOT NULL DEFAULT 'webhook';
+ALTER TABLE plugins ADD COLUMN IF NOT EXISTS builtin_key   TEXT;
+ALTER TABLE plugins ADD COLUMN IF NOT EXISTS plugin_config JSONB NOT NULL DEFAULT '{}';
+ALTER TABLE plugins ALTER COLUMN endpoint SET DEFAULT '';
 
 -- ── LLM Wiki ──────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS llm_models (

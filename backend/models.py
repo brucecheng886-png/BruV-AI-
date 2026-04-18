@@ -111,9 +111,15 @@ class Plugin(Base):
     id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=_uuid)
     name: Mapped[str] = mapped_column(String, unique=True, nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
+    # webhook | builtin
+    plugin_type: Mapped[str] = mapped_column(String, default="webhook")
+    # notion | chart | calculator | email | rss | weather | github | ...（builtin 時使用）
+    builtin_key: Mapped[str | None] = mapped_column(String)
     input_schema: Mapped[dict] = mapped_column(JSONB, default=dict)
-    endpoint: Mapped[str] = mapped_column(String, nullable=False)
-    auth_header: Mapped[str | None] = mapped_column(String)  # Fernet 加密
+    # 插件設定（非敏感：host/port/sender...）
+    plugin_config: Mapped[dict] = mapped_column(JSONB, default=dict)
+    endpoint: Mapped[str] = mapped_column(String, default="")    # webhook 用
+    auth_header: Mapped[str | None] = mapped_column(String)       # Fernet 加密（webhook bearer / builtin token）
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 

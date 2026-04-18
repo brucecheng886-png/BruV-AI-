@@ -120,12 +120,16 @@ def _run_agent_task(task_id: str, instruction: str, model: str):
         # 建立工具集
         from tools.llama_retriever_tool import build_knowledge_base_tool
         from tools.code_executor import build_code_executor_tool
+        from tools.plugin_tool_builder import build_plugin_tools_sync
+        from database import AsyncSessionLocal
+
+        plugin_tools = build_plugin_tools_sync(AsyncSessionLocal)
 
         tools = [
             build_knowledge_base_tool(),
             _build_web_search_tool(),
             build_code_executor_tool(),
-        ]
+        ] + plugin_tools
 
         # 建立 LangChain ReAct Agent
         from langchain_ollama import ChatOllama

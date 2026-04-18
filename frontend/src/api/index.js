@@ -144,10 +144,16 @@ export const wikiApi = {
 export const pluginsApi = {
   list: () =>
     fetch('/api/plugins', { headers: getHeaders(false) }).then(handleResponse),
+  catalog: () =>
+    fetch('/api/plugins/catalog/list', { headers: getHeaders(false) }).then(handleResponse),
   create: (body) =>
     fetch('/api/plugins', { method: 'POST', headers: getHeaders(), body: JSON.stringify(body) }).then(handleResponse),
+  update: (id, body) =>
+    fetch(`/api/plugins/${id}`, { method: 'PATCH', headers: getHeaders(), body: JSON.stringify(body) }).then(handleResponse),
   toggle: (id, enabled) =>
-    fetch(`/api/plugins/${id}`, { method: 'PATCH', headers: getHeaders(), body: JSON.stringify({ enabled }) }).then(handleResponse),
+    fetch(`/api/plugins/${id}/toggle`, { method: 'POST', headers: getHeaders() }).then(handleResponse),
+  invoke: (id, payload) =>
+    fetch(`/api/plugins/${id}/invoke`, { method: 'POST', headers: getHeaders(), body: JSON.stringify(payload) }).then(handleResponse),
   delete: (id) =>
     fetch(`/api/plugins/${id}`, { method: 'DELETE', headers: getHeaders(false) }).then(handleResponse),
 }
