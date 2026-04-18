@@ -381,11 +381,11 @@
                   />
                 </el-tabs>
               </div>
-              <el-scrollbar class="sheet-scroll">
+              <div class="sheet-scroll">
                 <div class="sheet-table-wrap">
                   <table class="sheet-table" v-html="sheetHtml[activeSheet] || ''" />
                 </div>
-              </el-scrollbar>
+              </div>
             </template>
           </el-tab-pane>
 
@@ -562,7 +562,7 @@ const panelRef = ref(null)
 const panelOpen = ref(false)
 const panelWidth = ref(380)
 const PANEL_MIN_W = 280
-const PANEL_MAX_W = 800
+const PANEL_MAX_W = 1200
 const PANEL_DEFAULT_W = 380
 
 function autoFitPanelWidth() {
@@ -1555,8 +1555,8 @@ function statusTagType(s) {
 
 /* ── 試算表 tab ── */
 .sheet-tab-bar { padding: 8px 12px 0; border-bottom: 1px solid #e2e8f0; }
-.sheet-scroll { flex: 1; overflow: hidden; width: 100%; }
-.sheet-table-wrap { padding: 12px 16px; width: max-content; min-width: 100%; box-sizing: border-box; }
+.sheet-scroll { flex: 1; overflow: auto; width: 100%; }
+.sheet-table-wrap { padding: 12px 16px; display: inline-block; min-width: 100%; box-sizing: border-box; }
 .sheet-table { border-collapse: collapse; font-size: 12px; }
 .sheet-table :deep(td),
 .sheet-table :deep(th) {
