@@ -342,6 +342,8 @@ async function selectConversation(conv) {
 }
 
 function newConversation() {
+  stopStreaming()
+  streaming.value = false
   currentConvId.value = null
   messages.value = []
   attachedDocs.value = []
