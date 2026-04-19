@@ -264,6 +264,7 @@ const availableModels = ref([])
 const selectedModel = ref('')
 let modelPollTimer = null
 let abortController = null
+let agentPollActive = false
 
 const SLASH_COMMANDS = [
   { name: '/search', icon: '🔍', desc: '搜尋知識庫模式' },
@@ -347,6 +348,9 @@ function newConversation() {
   currentConvId.value = null
   messages.value = []
   attachedDocs.value = []
+  inputText.value = ''
+  slashMenu.show = false
+  mentionMenu.show = false
 }
 
 async function deleteConversation(id) {
@@ -437,6 +441,7 @@ function removeDoc(docId) {
 // ── Stop ──────────────────────────────────────────────────────
 function stopStreaming() {
   if (abortController) { abortController.abort(); abortController = null }
+  agentPollActive = false
 }
 
 // ── Send ──────────────────────────────────────────────────────
@@ -459,6 +464,9 @@ async function runChat(text) {
     const docIds = attachedDocs.value.map(d => d.id)
     const resp = await chatStream(text, currentConvId.value, selectedModel.value || null, abortController.signal, docIds)
     if (!resp.ok) { aiMsg.content = '⚠️ 請求失敗，請重試'; return }
+    // backend 把新建的 conv_id 放在 X-Conversation-Id header
+    const headerConvId = resp.headers.get('X-Conversation-Id')
+    if (headerConvId && !currentConvId.value) currentConvId.value = headerConvId
     const reader = resp.body.getReader()
     const decoder = new TextDecoder()
     let buffer = ''
@@ -495,12 +503,14 @@ async function runAgent(instruction) {
   const aiMsg = { role: 'assistant', content: '', steps: [], sources: [], streaming: true }
   messages.value.push(aiMsg)
   streaming.value = true
+  agentPollActive = true
   try {
     const res = await agentApi.run(instruction, selectedModel.value || null)
     const taskId = res.task_id
     if (res.conv_id) currentConvId.value = res.conv_id
     let attempts = 0
     const poll = async () => {
+      if (!agentPollActive) return   // 已被 newConversation/stopStreaming 取消
       if (attempts >= 60) {
         aiMsg.content = '⚠️ Agent 任務超時'
         aiMsg.streaming = false; streaming.value = false; return
@@ -508,6 +518,7 @@ async function runAgent(instruction) {
       attempts++
       try {
         const status = await agentApi.getTask(taskId)
+        if (!agentPollActive) return  // await 期間被取消
         aiMsg.steps = status.steps || []
         if (atBottom.value) scrollToBottom()
         if (status.status === 'completed') {
@@ -521,6 +532,7 @@ async function runAgent(instruction) {
           setTimeout(poll, 2000)
         }
       } catch (e) {
+        if (!agentPollActive) return
         aiMsg.content = '⚠️ 查詢失敗：' + e.message
         aiMsg.streaming = false; streaming.value = false
       }
