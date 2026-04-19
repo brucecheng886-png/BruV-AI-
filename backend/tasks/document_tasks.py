@@ -399,6 +399,28 @@ def ingest_document(self, doc_id: str):
             self.request.id, doc_id, len(raw_chunks)
         )
 
+        # ── 自動更新跨文件關聯（優點2：零維護）──────────────────────
+        try:
+            neo_driver2 = _neo4j()
+            with neo_driver2.session(database="neo4j") as neo_sess:
+                # 與新文件共享相同 Entity 的所有文件 → 建立 RELATED_TO
+                neo_sess.run(
+                    """
+                    MATCH (d1:Document {id: $doc_id})-[:MENTIONS]->(e:Entity)<-[:MENTIONS]-(d2:Document)
+                    WHERE d1 <> d2
+                    MERGE (d1)-[r:RELATED_TO]->(d2)
+                    SET r.updated_at = datetime()
+                    """,
+                    doc_id=doc_id,
+                )
+            neo_driver2.close()
+            logger.info("[task:%s] Updated RELATED_TO for doc_id=%s", self.request.id, doc_id)
+        except Exception as link_exc:
+            logger.warning(
+                "[task:%s] RELATED_TO update skipped for doc_id=%s: %s",
+                self.request.id, doc_id, link_exc,
+            )
+
     except Exception as exc:
         saga.mark_compensated(error=str(exc))
         with _pg_conn() as pg:

@@ -181,6 +181,11 @@ export const systemSettingsApi = {
     fetch('/api/settings/user/change-password', { method: 'POST', headers: getHeaders(), body: JSON.stringify({ current_password, new_password }) }).then(handleResponse),
   getModels: () =>
     fetch('/api/settings/models', { headers: getHeaders(false) }).then(handleResponse),
+  // 知識庫 Schema
+  getSchema: () =>
+    fetch('/api/settings/schema', { headers: getHeaders(false) }).then(handleResponse),
+  saveSchema: (schema_text) =>
+    fetch('/api/settings/schema', { method: 'PUT', headers: getHeaders(), body: JSON.stringify({ schema_text }) }).then(handleResponse),
 }
 
 // Chat stream returns raw response for ReadableStream processing
@@ -197,6 +202,11 @@ export async function chatStream(query, conversationId, model, signal = null, do
     body: JSON.stringify(body),
     ...(signal ? { signal } : {}),
   })
+}
+
+export const chatApi = {
+  saveToKb: (msgId) =>
+    fetch(`/api/chat/messages/${msgId}/save_to_kb`, { method: 'POST', headers: getHeaders(false) }).then(handleResponse),
 }
 
 export const conversationsApi = {

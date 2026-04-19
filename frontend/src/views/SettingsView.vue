@@ -244,6 +244,27 @@
         </div>
       </el-tab-pane>
 
+      <!-- 知識庫 Schema Tab -->
+      <el-tab-pane label="知識庫 Schema" name="schema">
+        <div v-loading="schemaLoading" style="max-width:760px;">
+          <el-alert type="info" :closable="false" style="margin-bottom:20px;">
+            Schema 會被注入至每次問答的 System Prompt，用來告訴 AI 知識庫的結構與回答準則。若為空則不注入。
+          </el-alert>
+          <el-input
+            v-model="schemaText"
+            type="textarea"
+            :rows="20"
+            placeholder="用 Markdown 格式描述知識庫結構、領域、回答規則…"
+            style="font-family:monospace;font-size:13px;"
+          />
+          <div style="margin-top:12px;display:flex;gap:8px;">
+            <el-button type="primary" :loading="schemaSaving" @click="saveSchema">儲存 Schema</el-button>
+            <el-button @click="loadSchema">重置</el-button>
+            <span style="font-size:12px;color:#999;align-self:center;">上限 8000 字元</span>
+          </div>
+        </div>
+      </el-tab-pane>
+
       <!-- 使用者設定 Tab -->
       <el-tab-pane label="使用者設定" name="user">
         <div style="max-width:480px;">
@@ -381,8 +402,7 @@ function reloadPage() {
 // ── Tab 切換 ──────────────────────────────────────────────────────────────────
 const activeTab = ref('list')
 function onTabChange(tab) {
-  if (tab === 'rag') loadRagSettings()
-}
+  if (tab === 'rag') loadRagSettings()  if (tab === 'schema') loadSchema()}
 
 // ── Model List ────────────────────────────────────────────────────────────────
 const models = ref([])
@@ -717,6 +737,35 @@ async function saveRagSettings() {
     ElMessage.error(e.message)
   } finally {
     ragSaving.value = false
+  }
+}
+
+// ── 知識庫 Schema ──────────────────────────────────────────────────────────────────────────
+const schemaText    = ref('')
+const schemaLoading = ref(false)
+const schemaSaving  = ref(false)
+
+async function loadSchema() {
+  schemaLoading.value = true
+  try {
+    const data = await systemSettingsApi.getSchema()
+    schemaText.value = data.schema_text || ''
+  } catch (e) {
+    console.error(e)
+  } finally {
+    schemaLoading.value = false
+  }
+}
+
+async function saveSchema() {
+  schemaSaving.value = true
+  try {
+    await systemSettingsApi.saveSchema(schemaText.value)
+    ElMessage.success('Schema 已儲存，下次問答即生效')
+  } catch (e) {
+    ElMessage.error(e.message)
+  } finally {
+    schemaSaving.value = false
   }
 }
 

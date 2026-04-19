@@ -444,3 +444,64 @@ async def change_password(
     await db.commit()
     return {"ok": True, "message": "密碼已更新"}
 
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 知識庫 Schema（注入 RAG System Prompt 的結構定義）
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_SCHEMA_KEY = "kb_schema"
+_SCHEMA_DEFAULT = """\
+# 知識庫結構說明
+
+## 用途
+本知識庫為地端 AI 問答系統，收錄組織內部文件、研究報告與知識。
+
+## 回答準則
+- 優先引用知識庫中的文件作為依據
+- 若知識庫資料不足，應如實說明，不得臆測
+- 回答時標明來源文件名稱
+
+## 領域範疇
+（請在此填寫本知識庫的主要領域，例如：生物資訊、法規文件、技術手冊…）
+"""
+
+
+class SchemaOut(BaseModel):
+    schema_text: str
+
+
+class SchemaIn(BaseModel):
+    schema_text: str
+
+
+async def get_kb_schema(db: AsyncSession) -> str:
+    """供 chat.py 呼叫：讀取 KB Schema 文字"""
+    row = await db.get(SystemSetting, _SCHEMA_KEY)
+    return row.value if row else ""
+
+
+@router.get("/schema", response_model=SchemaOut)
+async def get_schema(
+    db: AsyncSession = Depends(get_db),
+    current_user: CurrentUser = None,
+):
+    row = await db.get(SystemSetting, _SCHEMA_KEY)
+    return SchemaOut(schema_text=row.value if row else _SCHEMA_DEFAULT)
+
+
+@router.put("/schema")
+async def save_schema(
+    body: SchemaIn,
+    db: AsyncSession = Depends(get_db),
+    current_user: CurrentUser = None,
+):
+    if len(body.schema_text) > 8000:
+        raise HTTPException(status_code=400, detail="Schema 文字不得超過 8000 字元")
+    existing = await db.get(SystemSetting, _SCHEMA_KEY)
+    if existing:
+        existing.value = body.schema_text
+    else:
+        db.add(SystemSetting(key=_SCHEMA_KEY, value=body.schema_text))
+    await db.commit()
+    return {"ok": True}
+

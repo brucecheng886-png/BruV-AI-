@@ -23,7 +23,7 @@ from auth import CurrentUser
 from database import get_db, get_qdrant_client
 from models import Conversation, Message
 from services.reranker import get_reranker
-from routers.settings_router import get_rag_runtime_config
+from routers.settings_router import get_rag_runtime_config, get_kb_schema
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -132,9 +132,13 @@ async def _rag_stream(
                             "page_number": page, "score": hit.score})
 
     context = "\n\n".join(context_parts)
+    # 讀取知識庫 Schema（優點3：架構注入）
+    kb_schema = await get_kb_schema(db)
+    schema_section = f"\n\n知識庫架構說明：\n{kb_schema}" if kb_schema.strip() else ""
     system_prompt = (
         "你是一個知識庫助理。請根據以下參考資料回答問題。"
-        "若資料不足以回答，請如實說明。\n\n"
+        "若資料不足以回答，請如實說明。"
+        f"{schema_section}\n\n"
         f"參考資料：\n{context}"
     )
 
@@ -316,4 +320,74 @@ async def rename_conversation(
     await db.commit()
     await db.refresh(conv)
     return ConversationOut(id=conv.id, title=conv.title, created_at=conv.created_at.isoformat())
+
+
+# ── 存入知識庫（優點4：問答結果回存）──────────────────────────────────────────
+
+@router.post("/messages/{msg_id}/save_to_kb", status_code=status.HTTP_202_ACCEPTED)
+async def save_message_to_kb(
+    msg_id: str,
+    current_user: CurrentUser = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """將 AI 回答訊息存入知識庫（建立 Document 並觸發 ingest）"""
+    import uuid as _uuid_mod
+    from models import Document
+    from services.storage import upload_file
+    from tasks.document_tasks import ingest_document
+
+    # 1. 查找訊息
+    result = await db.execute(select(Message).where(Message.id == msg_id))
+    msg = result.scalar_one_or_none()
+    if msg is None:
+        raise HTTPException(status_code=404, detail="訊息不存在")
+    if msg.role != "assistant":
+        raise HTTPException(status_code=400, detail="只能儲存 AI 回答訊息")
+
+    # 2. 組合 Markdown 文字（回答 + 來源附錄）
+    sources_md = ""
+    if msg.sources:
+        lines = ["\n\n---\n## 來源文件\n"]
+        for s in msg.sources:
+            title = s.get("title", s.get("doc_id", "unknown"))
+            page = s.get("page_number", "")
+            score = s.get("score", "")
+            lines.append(f"- **{title}**"
+                         + (f" p.{page}" if page else "")
+                         + (f" (相關度 {score:.2f})" if isinstance(score, float) else ""))
+        sources_md = "\n".join(lines)
+
+    # 從對話取得標題
+    conv_result = await db.execute(
+        select(Conversation).where(Conversation.id == msg.conv_id))
+    conv = conv_result.scalar_one_or_none()
+    conv_title = conv.title if conv else "AI 回答"
+    doc_title = f"[知識] {conv_title[:60]}"
+
+    md_content = f"# {doc_title}\n\n{msg.content}{sources_md}"
+    md_bytes = md_content.encode("utf-8")
+
+    # 3. 上傳到 MinIO（同步函式，用 asyncio executor 執行）
+    doc_id = str(_uuid_mod.uuid4())
+    file_path = f"uploads/{doc_id}.md"
+    import asyncio
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, upload_file, file_path, md_bytes, "text/markdown")
+
+    # 4. 建立 Document 記錄
+    doc = Document(
+        id=doc_id,
+        title=doc_title,
+        file_path=file_path,
+        file_type="md",
+        status="pending",
+        created_by=current_user.id if current_user else None,
+    )
+    db.add(doc)
+    await db.commit()
+
+    # 5. 觸發 ingest 任務
+    ingest_document.delay(doc_id)
+
+    return {"ok": True, "doc_id": doc_id, "title": doc_title}
 

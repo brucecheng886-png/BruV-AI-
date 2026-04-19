@@ -132,6 +132,12 @@
               <div v-if="!msg.streaming" class="msg-actions ai-actions">
                 <button @click="copyText(msg.content)" title="複製">📋</button>
                 <button @click="retryFrom(idx)" title="重試">🔄</button>
+                <button
+                  v-if="msg.id"
+                  @click="saveToKb(msg)"
+                  :title="savedMsgIds.has(msg.id) ? '已儲存至知識庫' : '存入知識庫'"
+                  :style="{ color: savedMsgIds.has(msg.id) ? '#67c23a' : '' }"
+                >💾</button>
               </div>
             </div>
 
@@ -216,7 +222,7 @@ import json from 'highlight.js/lib/languages/json'
 import xml from 'highlight.js/lib/languages/xml'
 import css from 'highlight.js/lib/languages/css'
 import { ElMessage } from 'element-plus'
-import { chatStream, conversationsApi, agentApi, systemSettingsApi, docsApi } from '../api/index.js'
+import { chatStream, conversationsApi, agentApi, systemSettingsApi, docsApi, chatApi } from '../api/index.js'
 
 // ── highlight.js ──────────────────────────────────────────────
 ;[['javascript', javascript], ['python', python], ['typescript', typescript],
@@ -316,6 +322,19 @@ function onMsgAreaClick(e) {
 // ── Message actions ───────────────────────────────────────────
 function copyText(text) {
   navigator.clipboard.writeText(text || '').then(() => ElMessage.success('已複製'))
+}
+
+const savedMsgIds = ref(new Set())
+
+async function saveToKb(msg) {
+  if (!msg.id || savedMsgIds.value.has(msg.id)) return
+  try {
+    await chatApi.saveToKb(msg.id)
+    savedMsgIds.value.add(msg.id)
+    ElMessage.success('已加入知識庫，正在背景索引…')
+  } catch (e) {
+    ElMessage.error('存入失敗：' + e.message)
+  }
 }
 
 async function retryFrom(idx) {
