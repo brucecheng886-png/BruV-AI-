@@ -18,20 +18,22 @@ _REGISTRY: dict[str, Callable] = {}
 def _ensure_loaded():
     if _REGISTRY:
         return
-    from plugins.notion_handler     import run as notion_run
-    from plugins.chart_handler      import run as chart_run
-    from plugins.calculator_handler import run as calc_run
-    from plugins.email_handler      import run as email_run
-    from plugins.rss_handler        import run as rss_run
-    from plugins.weather_handler    import run as weather_run
+    from plugins.notion_handler        import run as notion_run
+    from plugins.chart_handler         import run as chart_run
+    from plugins.calculator_handler    import run as calc_run
+    from plugins.email_handler         import run as email_run
+    from plugins.rss_handler           import run as rss_run
+    from plugins.weather_handler       import run as weather_run
+    from plugins.protein_graph_handler import run as protein_run
 
     _REGISTRY.update({
-        "notion":     notion_run,
-        "chart":      chart_run,
-        "calculator": calc_run,
-        "email":      email_run,
-        "rss":        rss_run,
-        "weather":    weather_run,
+        "notion":        notion_run,
+        "chart":         chart_run,
+        "calculator":    calc_run,
+        "email":         email_run,
+        "rss":           rss_run,
+        "weather":       weather_run,
+        "protein_graph": protein_run,
     })
 
 
@@ -211,6 +213,25 @@ PLUGIN_CATALOG = [
         "config_fields": [],
         "ai_description": "將內容轉換為 PDF 報告。輸入 JSON: {\"title\": \"...\", \"content\": \"Markdown content\"}",
         "planned": True,
+    },
+    {
+        "key": "protein_graph",
+        "name": "蛋白質互作圖譜",
+        "description": "上傳 GeneCards 基因清單與連結評分 xlsx，生成 3D 蛋白質互作網路視覺化，支援 AI 詢問",
+        "icon": "🧬",
+        "category": "bioinformatics",
+        "category_label": "生物資訊",
+        "actions": ["get_networks", "get_graph", "get_top"],
+        "config_fields": [],
+        "ai_description": (
+            "查詢蛋白質互作網路。"
+            "輸入 JSON: {\"action\": \"get_networks\"} 或 "
+            "{\"action\": \"get_graph\", \"network\": \"USP7\", \"min_score\": 0.7} 或 "
+            "{\"action\": \"get_top\", \"network\": \"USP7\", \"limit\": 20}"
+        ),
+        "planned": False,
+        "has_page": True,
+        "page_path": "/protein",
     },
     {
         "key": "viz3d",

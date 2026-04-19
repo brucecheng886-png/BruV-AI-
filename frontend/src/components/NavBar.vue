@@ -35,6 +35,7 @@ const navItems = [
   { path: '/docs', label: '文件管理', icon: 'Document' },
   { path: '/ontology', label: '知識圖譜', icon: 'Share' },
   { path: '/plugins', label: '插件管理', icon: 'Grid' },
+  { path: '/protein', label: '蛋白質圖譜', icon: 'Connection' },
   { path: '/settings', label: '設定 / Wiki', icon: 'Setting' },
 ]
 

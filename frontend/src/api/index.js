@@ -216,3 +216,25 @@ export const agentApi = {
   }).then(handleResponse),
   getTask: (taskId) => fetch(`/api/agent/tasks/${taskId}`, { headers: getHeaders(false) }).then(handleResponse),
 }
+
+export const proteinApi = {
+  import: (files) => {
+    const auth = useAuthStore()
+    const fd = new FormData()
+    files.forEach(f => fd.append('files', f))
+    return fetch('/api/protein/import', {
+      method: 'POST',
+      headers: auth.token ? { 'Authorization': `Bearer ${auth.token}` } : {},
+      body: fd,
+    }).then(handleResponse)
+  },
+  networks: () => fetch('/api/protein/networks', { headers: getHeaders(false) }).then(handleResponse),
+  graph: (network = 'USP7', minScore = 0.5) =>
+    fetch(`/api/protein/graph?network=${encodeURIComponent(network)}&min_score=${minScore}`, {
+      headers: getHeaders(false),
+    }).then(handleResponse),
+  top: (network = 'USP7', limit = 20) =>
+    fetch(`/api/protein/top?network=${encodeURIComponent(network)}&limit=${limit}`, {
+      headers: getHeaders(false),
+    }).then(handleResponse),
+}

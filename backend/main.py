@@ -13,6 +13,7 @@ from config import settings
 from routers import chat, documents, ontology, wiki, agent, plugins, search, health, knowledge_bases
 from routers import auth as auth_router
 from routers import settings_router
+from routers import protein_router
 
 logger = logging.getLogger(__name__)
 
@@ -77,3 +78,4 @@ app.include_router(agent.router,        prefix="/api/agent",        tags=["agent
 app.include_router(plugins.router,      prefix="/api/plugins",      tags=["plugins"])
 app.include_router(search.router,       prefix="/api/search",       tags=["search"])
 app.include_router(settings_router.router, prefix="/api/settings", tags=["settings"])
+app.include_router(protein_router.router,  prefix="/api/protein",   tags=["protein"])
