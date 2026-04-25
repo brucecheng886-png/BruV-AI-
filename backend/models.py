@@ -37,11 +37,68 @@ class KnowledgeBase(Base):
     description: Mapped[str | None] = mapped_column(Text)
     color: Mapped[str | None] = mapped_column(String(20), default="#2563eb")
     icon: Mapped[str | None] = mapped_column(String(50), default="📚")
+    embedding_model: Mapped[str | None] = mapped_column(String, nullable=True, default=None)
+    embedding_provider: Mapped[str | None] = mapped_column(String, nullable=True, default=None)
+    chunk_size: Mapped[int | None] = mapped_column(Integer, nullable=True, default=None)
+    chunk_overlap: Mapped[int | None] = mapped_column(Integer, nullable=True, default=None)
+    language: Mapped[str | None] = mapped_column(String, nullable=True, default="auto")
+    rerank_enabled: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=None)
+    default_top_k: Mapped[int | None] = mapped_column(Integer, nullable=True, default=None)
     created_by: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
-    documents: Mapped[list["Document"]] = relationship("Document", back_populates="knowledge_base")
+    documents: Mapped[list["Document"]] = relationship(
+        "Document", back_populates="knowledge_base",
+        foreign_keys="Document.knowledge_base_id",
+    )
+    doc_assoc: Mapped[list["DocumentKnowledgeBase"]] = relationship(
+        "DocumentKnowledgeBase", back_populates="knowledge_base"
+    )
+
+
+class Tag(Base):
+    __tablename__ = "tags"
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=_uuid)
+    name: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
+    slug: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
+    color: Mapped[str] = mapped_column(String(20), default="#409eff")
+    description: Mapped[str | None] = mapped_column(Text)
+    parent_id: Mapped[str | None] = mapped_column(ForeignKey("tags.id", ondelete="SET NULL"))
+    created_by: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    children: Mapped[list["Tag"]] = relationship("Tag", back_populates="parent", foreign_keys="Tag.parent_id")
+    parent: Mapped["Tag | None"] = relationship("Tag", back_populates="children", remote_side="Tag.id", foreign_keys="Tag.parent_id")
+    doc_assoc: Mapped[list["DocumentTag"]] = relationship("DocumentTag", back_populates="tag", cascade="all, delete")
+
+
+class DocumentKnowledgeBase(Base):
+    __tablename__ = "document_knowledge_bases"
+
+    doc_id: Mapped[str] = mapped_column(ForeignKey("documents.id", ondelete="CASCADE"), primary_key=True)
+    kb_id: Mapped[str] = mapped_column(ForeignKey("knowledge_bases.id", ondelete="CASCADE"), primary_key=True)
+    score: Mapped[float | None] = mapped_column(Float)
+    source: Mapped[str] = mapped_column(String(20), default="auto")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    document: Mapped["Document"] = relationship("Document", back_populates="kb_assoc")
+    knowledge_base: Mapped["KnowledgeBase"] = relationship("KnowledgeBase", back_populates="doc_assoc")
+
+
+class DocumentTag(Base):
+    __tablename__ = "document_tags"
+
+    doc_id: Mapped[str] = mapped_column(ForeignKey("documents.id", ondelete="CASCADE"), primary_key=True)
+    tag_id: Mapped[str] = mapped_column(ForeignKey("tags.id", ondelete="CASCADE"), primary_key=True)
+    source: Mapped[str] = mapped_column(String(20), default="manual")
+    confidence: Mapped[float | None] = mapped_column(Float)
+    created_by: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    tag: Mapped["Tag"] = relationship("Tag", back_populates="doc_assoc")
+    document: Mapped["Document"] = relationship("Document", back_populates="tags_assoc")
 
 
 class Document(Base):
@@ -57,12 +114,24 @@ class Document(Base):
     chunk_count: Mapped[int] = mapped_column(Integer, default=0)
     custom_fields: Mapped[dict] = mapped_column(JSONB, default=dict)
     knowledge_base_id: Mapped[str | None] = mapped_column(ForeignKey("knowledge_bases.id", ondelete="SET NULL"))
+    suggested_kb_id: Mapped[str | None] = mapped_column(ForeignKey("knowledge_bases.id", ondelete="SET NULL"), nullable=True)
+    suggested_kb_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    suggested_tags: Mapped[list] = mapped_column(JSONB, default=list)
+    cover_image_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_by: Mapped[str | None] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     chunks: Mapped[list["Chunk"]] = relationship("Chunk", back_populates="document", cascade="all, delete")
-    knowledge_base: Mapped["KnowledgeBase | None"] = relationship("KnowledgeBase", back_populates="documents")
+    knowledge_base: Mapped["KnowledgeBase | None"] = relationship(
+        "KnowledgeBase", back_populates="documents",
+        foreign_keys="Document.knowledge_base_id",
+    )
+    tags_assoc: Mapped[list["DocumentTag"]] = relationship("DocumentTag", back_populates="document", cascade="all, delete")
+    kb_assoc: Mapped[list["DocumentKnowledgeBase"]] = relationship(
+        "DocumentKnowledgeBase", back_populates="document", cascade="all, delete"
+    )
 
 
 class Chunk(Base):
@@ -86,10 +155,18 @@ class Conversation(Base):
     id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=_uuid)
     user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"))
     title: Mapped[str] = mapped_column(String, default="新對話")
+    kb_scope_id: Mapped[str | None] = mapped_column(ForeignKey("knowledge_bases.id", ondelete="SET NULL"))
+    doc_scope_ids: Mapped[list] = mapped_column(JSONB, default=list)
+    tag_scope_ids: Mapped[list] = mapped_column(JSONB, default=list)
+    agent_type: Mapped[str] = mapped_column(String(20), default="chat", server_default="chat")
+    agent_meta: Mapped[dict] = mapped_column(JSONB, default=dict, server_default="{}")
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    summarized_up_to: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("messages.id", ondelete="SET NULL"), nullable=True)
+    summary_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
-    messages: Mapped[list["Message"]] = relationship("Message", back_populates="conversation", cascade="all, delete")
+    messages: Mapped[list["Message"]] = relationship("Message", back_populates="conversation", cascade="all, delete", foreign_keys="Message.conv_id")
 
 
 class Message(Base):
@@ -102,7 +179,7 @@ class Message(Base):
     sources: Mapped[list] = mapped_column(JSONB, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
-    conversation: Mapped["Conversation"] = relationship("Conversation", back_populates="messages")
+    conversation: Mapped["Conversation"] = relationship("Conversation", back_populates="messages", foreign_keys="Message.conv_id")
 
 
 class Plugin(Base):
@@ -179,6 +256,24 @@ class SystemSetting(Base):
 
     key: Mapped[str] = mapped_column(String(100), primary_key=True)
     value: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class PromptTemplate(Base):
+    __tablename__ = "prompt_templates"
+
+    template_id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=_uuid)
+    category: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    template: Mapped[str] = mapped_column(Text, nullable=False)
+    required_vars: Mapped[list] = mapped_column(JSONB, default=list)
+    optional_vars: Mapped[list] = mapped_column(JSONB, default=list)
+    example_triggers: Mapped[list] = mapped_column(JSONB, default=list)
+    pit_warnings: Mapped[list] = mapped_column(JSONB, default=list)
+    usage_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )

@@ -170,6 +170,106 @@ async def reject_review_item(
 
 # ?? Blocklist ?????????????????????????????????????????????????????????????????
 
+
+
+# -- Batch Operations ---------------------------------------------------------
+
+class BatchBody(BaseModel):
+    ids: list[str] = []
+    all: bool = False
+
+
+@router.post("/review-queue/batch-approve", status_code=200)
+async def batch_approve_review(
+    body: BatchBody,
+    db: AsyncSession = Depends(get_db),
+    neo4j_session=Depends(get_neo4j_session),
+    current_user: CurrentUser = None,
+):
+    if body.all:
+        result = await db.execute(
+            select(OntologyReviewQueue).where(OntologyReviewQueue.status == "pending")
+        )
+        items = result.scalars().all()
+    elif body.ids:
+        result = await db.execute(
+            select(OntologyReviewQueue).where(
+                and_(OntologyReviewQueue.id.in_(body.ids),
+                     OntologyReviewQueue.status == "pending")
+            )
+        )
+        items = result.scalars().all()
+    else:
+        return {"approved": 0}
+    count = 0
+    for item in items:
+        data = item.proposed_data or {}
+        name = item.entity_name
+        etype = item.entity_type
+        desc = data.get("description", "")
+        props = data.get("properties", {})
+        if item.action in ("create", "update"):
+            await neo4j_session.run(
+                "MERGE (e:Entity {name: $name}) SET e.type = $etype, e.description = $desc",
+                name=name, etype=etype, desc=desc,
+            )
+            for k, v in props.items():
+                await neo4j_session.run(
+                    "MATCH (e:Entity {name: $name}) SET e[$key] = $val",
+                    name=name, key=k, val=str(v),
+                )
+        elif item.action == "delete":
+            await neo4j_session.run(
+                "MATCH (e:Entity {name: $name}) DETACH DELETE e", name=name
+            )
+        item.status = "approved"
+        item.reviewed_by = current_user.id if current_user else None
+        count += 1
+    await db.commit()
+    return {"approved": count}
+
+
+@router.post("/review-queue/batch-reject", status_code=200)
+async def batch_reject_review(
+    body: BatchBody,
+    db: AsyncSession = Depends(get_db),
+    current_user: CurrentUser = None,
+):
+    if body.all:
+        result = await db.execute(
+            select(OntologyReviewQueue).where(OntologyReviewQueue.status == "pending")
+        )
+        items = result.scalars().all()
+    elif body.ids:
+        result = await db.execute(
+            select(OntologyReviewQueue).where(
+                and_(OntologyReviewQueue.id.in_(body.ids),
+                     OntologyReviewQueue.status == "pending")
+            )
+        )
+        items = result.scalars().all()
+    else:
+        return {"rejected": 0}
+    count = 0
+    for item in items:
+        existing = await db.execute(
+            select(OntologyBlocklist).where(
+                and_(OntologyBlocklist.name == item.entity_name,
+                     OntologyBlocklist.entity_type == item.entity_type)
+            )
+        )
+        if not existing.scalar_one_or_none():
+            db.add(OntologyBlocklist(
+                name=item.entity_name,
+                entity_type=item.entity_type,
+                blocked_by=current_user.id if current_user else None,
+            ))
+        item.status = "rejected"
+        item.reviewed_by = current_user.id if current_user else None
+        count += 1
+    await db.commit()
+    return {"rejected": count}
+
 @router.get("/blocklist", response_model=list[BlocklistOut])
 async def list_blocklist(
     limit: int = Query(100, ge=1, le=500),

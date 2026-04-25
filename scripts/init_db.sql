@@ -96,6 +96,10 @@ ALTER TABLE llm_models ADD COLUMN IF NOT EXISTS provider     TEXT;
 ALTER TABLE llm_models ADD COLUMN IF NOT EXISTS base_url     TEXT;
 ALTER TABLE llm_models ADD COLUMN IF NOT EXISTS api_key      TEXT;  -- Fernet 加密
 
+-- ── v3 升級：對話 Scope（方案 C）───────────────────────────────
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS kb_scope_id   UUID REFERENCES knowledge_bases(id) ON DELETE SET NULL;
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS doc_scope_ids JSONB NOT NULL DEFAULT '[]';
+
 -- ── LLM Wiki ──────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS llm_models (
     id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -153,8 +157,61 @@ CREATE TABLE IF NOT EXISTS saga_log (
 CREATE INDEX IF NOT EXISTS idx_saga_log_status      ON saga_log(status);
 CREATE INDEX IF NOT EXISTS idx_saga_log_resource    ON saga_log(resource_id);
 
+-- ================================================================
+-- v2 升級：批量爬取 / Notion 同步 / 本體論審核修正（idempotent）
+-- ================================================================
+
+-- crawl_batches：批量爬取任務進度
+CREATE TABLE IF NOT EXISTS crawl_batches (
+    id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    batch_name  TEXT,
+    total       INT NOT NULL DEFAULT 0,
+    status      TEXT NOT NULL DEFAULT 'queued',
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- documents：新增 url_fingerprint（SHA256 防重複）與 batch_id
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS url_fingerprint TEXT;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS batch_id UUID REFERENCES crawl_batches(id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_documents_url_fp
+    ON documents(url_fingerprint)
+    WHERE url_fingerprint IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_documents_batch_id ON documents(batch_id);
+
+-- notion_sync_log：Notion 增量同步紀錄
+CREATE TABLE IF NOT EXISTS notion_sync_log (
+    page_id          TEXT PRIMARY KEY,
+    last_edited_time TIMESTAMPTZ NOT NULL,
+    doc_id           UUID REFERENCES documents(id) ON DELETE SET NULL,
+    synced_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- ontology_review_queue 唯一部分索引（防止重複 pending 審核）
+CREATE UNIQUE INDEX IF NOT EXISTS idx_orq_entity_uniq
+    ON ontology_review_queue(entity_name, entity_type)
+    WHERE status = 'pending';
+
 -- ── 預設管理員帳號（密碼需在首次部署後修改）─────────────────
 -- 密碼 hash 對應 'changeme123'（bcrypt），部署後請立即修改
 INSERT INTO users (email, password, role)
 VALUES ('admin@local', '$2b$12$placeholder_hash_change_on_deploy', 'admin')
 ON CONFLICT (email) DO NOTHING;
+
+
+-- ── Prompt 模板 ─────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS prompt_templates (
+    template_id     UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    category        TEXT NOT NULL,
+    title           TEXT NOT NULL,
+    template        TEXT NOT NULL,
+    required_vars   JSONB NOT NULL DEFAULT '[]',
+    optional_vars   JSONB NOT NULL DEFAULT '[]',
+    example_triggers JSONB NOT NULL DEFAULT '[]',
+    pit_warnings    JSONB NOT NULL DEFAULT '[]',
+    usage_count     INT NOT NULL DEFAULT 0,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_prompt_templates_category
+    ON prompt_templates(category);

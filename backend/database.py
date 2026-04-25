@@ -90,11 +90,24 @@ async def ensure_qdrant_collection():
     client = get_qdrant_client()
     collections = await client.get_collections()
     names = [c.name for c in collections.collections]
+
+    # 主文件 collection
     if settings.QDRANT_COLLECTION not in names:
         await client.create_collection(
             collection_name=settings.QDRANT_COLLECTION,
             vectors_config=VectorParams(size=1024, distance=Distance.COSINE),
         )
-        logger.info("Created Qdrant collection: %s", settings.QDRANT_COLLECTION)
+        logger.info("已建立 Qdrant collection: %s", settings.QDRANT_COLLECTION)
     else:
-        logger.info("Qdrant collection already exists: %s", settings.QDRANT_COLLECTION)
+        logger.info("Qdrant collection 已存在: %s", settings.QDRANT_COLLECTION)
+
+    # prompt_templates collection
+    _PROMPT_COLLECTION = "prompt_templates"
+    if _PROMPT_COLLECTION not in names:
+        await client.create_collection(
+            collection_name=_PROMPT_COLLECTION,
+            vectors_config=VectorParams(size=1024, distance=Distance.COSINE),
+        )
+        logger.info("已建立 Qdrant collection: %s", _PROMPT_COLLECTION)
+    else:
+        logger.info("Qdrant collection 已存在: %s", _PROMPT_COLLECTION)

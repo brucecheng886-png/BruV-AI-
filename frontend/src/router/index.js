@@ -19,27 +19,29 @@ const router = createRouter({
 
 router.beforeEach(async (to) => {
   const auth = useAuthStore()
-  if (to.meta.requiresAuth) {
-    if (!auth.token) {
-      return '/login'
-    }
-    // 驗證 token 是否仍然有效（僅在頁面切換時，非每次 API 呼叫）
-    if (!router._tokenVerified) {
-      try {
-        const resp = await fetch('/api/auth/me', {
-          headers: { 'Authorization': `Bearer ${auth.token}` }
-        })
-        if (!resp.ok) {
-          auth.logout()
-          return '/login'
-        }
-        router._tokenVerified = true
-      } catch {
+
+  if (!to.meta.requiresAuth) return true
+
+  if (!auth.token) return '/login'
+
+  // 驗證 token 是否仍然有效（每個 session 只驗一次，非每次 API 呼叫）
+  if (!router._tokenVerified) {
+    try {
+      const resp = await fetch('/api/auth/me', {
+        headers: { 'Authorization': `Bearer ${auth.token}` }
+      })
+      if (!resp.ok) {
         auth.logout()
         return '/login'
       }
+      router._tokenVerified = true
+    } catch {
+      auth.logout()
+      return '/login'
     }
   }
+
+  return true
 })
 
 export default router

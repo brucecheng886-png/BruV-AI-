@@ -14,6 +14,9 @@ from routers import chat, documents, ontology, wiki, agent, plugins, search, hea
 from routers import auth as auth_router
 from routers import settings_router
 from routers import protein_router
+from routers import prompt_engine
+from routers import tags
+from routers import agent_skills
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +32,25 @@ async def lifespan(app: FastAPI):
     # 初始化資料庫連線、Re-ranker 等
     from services.reranker import get_reranker
     await get_reranker()  # 預載入 Re-ranker 模型
+
+    # 補入預設 agent_skills（kb）
+    try:
+        from database import AsyncSessionLocal
+        from sqlalchemy import text as _t
+        async with AsyncSessionLocal() as _db:
+            await _db.execute(_t(
+                "INSERT INTO agent_skills (page_key, name, user_prompt, is_enabled) "
+                "VALUES (:pk, :nm, :up, TRUE) "
+                "ON CONFLICT (page_key) DO NOTHING"
+            ), {
+                "pk": "kb",
+                "nm": "知識庫助理",
+                "up": "你是知識庫助理。你可以幫助使用者：\n- 搜尋知識庫文件\n- 回答知識庫相關問題\n- 協助整理和分類文件\n\n回答時請簡潔明確，優先使用繁體中文。",
+            })
+            await _db.commit()
+    except Exception as _e:
+        logger.warning("Seed kb agent_skill failed: %s", _e)
+
     logger.info("Backend ready.")
     yield
     logger.info("Shutting down...")
@@ -79,3 +101,6 @@ app.include_router(plugins.router,      prefix="/api/plugins",      tags=["plugi
 app.include_router(search.router,       prefix="/api/search",       tags=["search"])
 app.include_router(settings_router.router, prefix="/api/settings", tags=["settings"])
 app.include_router(protein_router.router,  prefix="/api/protein",   tags=["protein"])
+app.include_router(prompt_engine.router,   prefix="/api/prompt-templates", tags=["prompt-engine"])
+app.include_router(tags.router,            prefix="/api/tags",             tags=["tags"])
+app.include_router(agent_skills.router,    prefix="/api/agent-skills",     tags=["agent-skills"])

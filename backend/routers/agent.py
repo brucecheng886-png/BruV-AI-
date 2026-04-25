@@ -121,6 +121,10 @@ def _run_agent_task(task_id: str, instruction: str, model: str):
         from tools.llama_retriever_tool import build_knowledge_base_tool
         from tools.code_executor import build_code_executor_tool
         from tools.plugin_tool_builder import build_plugin_tools_sync
+        from tools.bulk_crawl_tool import build_bulk_crawl_tool
+        from tools.notion_sync_tool import build_notion_sync_tool
+        from tools.protein_analysis_tool import build_protein_analysis_tool
+        from tools.system_tools import build_system_tools
         from database import AsyncSessionLocal
 
         plugin_tools = build_plugin_tools_sync(AsyncSessionLocal)
@@ -129,7 +133,10 @@ def _run_agent_task(task_id: str, instruction: str, model: str):
             build_knowledge_base_tool(),
             _build_web_search_tool(),
             build_code_executor_tool(),
-        ] + plugin_tools
+            build_bulk_crawl_tool(),
+            build_notion_sync_tool(),
+            build_protein_analysis_tool(),
+        ] + plugin_tools + build_system_tools()
 
         # 建立 LangChain ReAct Agent
         from langchain_ollama import ChatOllama

@@ -12,13 +12,17 @@
         class="nav-item"
         active-class="nav-active"
       >
-        <el-icon><component :is="item.icon" /></el-icon>
+        <component :is="item.icon" :size="18" :stroke-width="1.5" />
         {{ item.label }}
       </router-link>
     </nav>
-    <div class="navbar-footer">
-      <div class="navbar-email">{{ authStore.userEmail }}</div>
-      <el-button size="small" plain @click="handleLogout" style="width:100%;">登出</el-button>
+    <div class="navbar-footer" title="使用者設定" @click="goToUserSettings">
+      <div class="footer-avatar">{{ authStore.userEmail ? authStore.userEmail[0].toUpperCase() : '?' }}</div>
+      <div class="footer-info">
+        <div class="footer-email">{{ authStore.userEmail }}</div>
+        <span class="footer-role" :class="{ 'role-admin': authStore.userRole === 'admin' }">{{ authStore.userRole }}</span>
+      </div>
+      <LogOut :size="16" :stroke-width="1.5" class="footer-logout" @click.stop="handleLogout" />
     </div>
   </div>
 </template>
@@ -26,22 +30,27 @@
 <script setup>
 import { useAuthStore } from '../stores/auth.js'
 import { useRouter } from 'vue-router'
+import { MessageSquare, FolderOpen, Network, Puzzle, Dna, Settings, LogOut } from 'lucide-vue-next'
 
 const authStore = useAuthStore()
 const router = useRouter()
 
 const navItems = [
-  { path: '/chat', label: '對話', icon: 'ChatDotRound' },
-  { path: '/docs', label: '文件管理', icon: 'Document' },
-  { path: '/ontology', label: '知識圖譜', icon: 'Share' },
-  { path: '/plugins', label: '插件管理', icon: 'Grid' },
-  { path: '/protein', label: '蛋白質圖譜', icon: 'Connection' },
-  { path: '/settings', label: '設定 / Wiki', icon: 'Setting' },
+  { path: '/chat',     label: '對話',       icon: MessageSquare },
+  { path: '/docs',     label: '文件管理',   icon: FolderOpen },
+  { path: '/ontology', label: '知識圖譜',   icon: Network },
+  { path: '/plugins',  label: '插件管理',   icon: Puzzle },
+  { path: '/protein',  label: '蛋白質圖譜', icon: Dna },
+  { path: '/settings', label: '設定 / Wiki', icon: Settings },
 ]
 
 function handleLogout() {
   authStore.logout()
   router.push('/login')
+}
+
+function goToUserSettings() {
+  router.push({ path: '/settings', query: { group: 'user' } })
 }
 </script>
 
@@ -53,7 +62,7 @@ function handleLogout() {
   border-right: 1px solid #e2e8f0;
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  height: 100%;
   font-family: -apple-system, 'Microsoft JhengHei', sans-serif;
 }
 
@@ -111,16 +120,68 @@ function handleLogout() {
 }
 
 .navbar-footer {
-  padding: 14px 16px;
+  padding: 8px 12px;
   border-top: 1px solid #e2e8f0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.15s;
+}
+.navbar-footer:hover { background: #e8f0fe; }
+
+.footer-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: #dbeafe;
+  color: #1d4ed8;
+  font-size: 13px;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
 }
 
-.navbar-email {
+.footer-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.footer-email {
   font-size: 12px;
-  color: #64748b;
-  margin-bottom: 8px;
+  color: var(--el-text-color-primary, #303133);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  max-width: 90px;
 }
+
+.footer-role {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: #f1f5f9;
+  color: #64748b;
+  align-self: flex-start;
+}
+.footer-role.role-admin {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.footer-logout {
+  color: var(--el-text-color-secondary, #909399);
+  cursor: pointer;
+  flex-shrink: 0;
+  padding: 4px;
+  border-radius: 4px;
+  transition: color 0.15s;
+}
+.footer-logout:hover { color: #ef4444; }
 </style>

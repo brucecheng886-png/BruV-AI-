@@ -93,6 +93,15 @@
             審核佇列
             <el-badge v-if="pendingCount > 0" :value="pendingCount" style="margin-left:4px;" />
           </template>
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
+            <span style="font-size:13px;color:#606266;">共 {{ pendingCount }} 筆待審核</span>
+            <el-button type="success" size="small" :loading="batchLoading" @click="batchApproveAll">
+              <CheckCheck :size="14" :stroke-width="1.5" style="margin-right:4px" />全部核准
+            </el-button>
+            <el-button type="danger" size="small" :loading="batchLoading" @click="batchRejectAll">
+              <XCircle :size="14" :stroke-width="1.5" style="margin-right:4px" />全部拒絕
+            </el-button>
+          </div>
           <el-table :data="reviewQueue" v-loading="queueLoading" stripe style="width:100%;">
             <el-table-column label="實體名稱" prop="entity_name" min-width="120" />
             <el-table-column label="類型" prop="entity_type" width="90" />
@@ -145,8 +154,10 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { ref, computed, onMounted, onActivated, onUnmounted, watch, nextTick } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { Close } from '@element-plus/icons-vue'
+import { CheckCheck, XCircle } from 'lucide-vue-next'
 import cytoscape from 'cytoscape'
 import { ontologyApi } from '../api/index.js'
 import ForceGraph3D from '3d-force-graph'
@@ -201,11 +212,26 @@ function onNodePanelResizeStart(e) {
 const reviewQueue = ref([])
 const queueLoading = ref(false)
 const pendingCount = ref(0)
+const batchLoading = ref(false)
 
 const blocklist = ref([])
 const blocklistLoading = ref(false)
 
+let _ontoMounting = false
 onMounted(async () => {
+  _ontoMounting = true
+  try {
+    await loadGraph()
+    await loadReviewQueue()
+    await loadBlocklist()
+  } finally {
+    _ontoMounting = false
+  }
+  window.addEventListener('ai-action', _onAiAction)
+})
+
+onActivated(async () => {
+  if (_ontoMounting) return
   await loadGraph()
   await loadReviewQueue()
   await loadBlocklist()
@@ -220,7 +246,16 @@ watch(activeTab, (t) => {
 
 onUnmounted(() => {
   if (graph3d) { try { graph3d._destructor?.() } catch {} ; graph3d = null }
+  window.removeEventListener('ai-action', _onAiAction)
 })
+
+function _onAiAction(e) {
+  const action = e.detail
+  if (action.type === 'batch_approve_all' || action.type === 'batch_reject_all') {
+    loadReviewQueue()
+    loadGraph()
+  }
+}
 
 // ── 3D 圖譜 ───────────────────────────────────────────────────────────────────
 const container3d  = ref(null)
@@ -484,6 +519,48 @@ async function rejectItem(id) {
     console.error(e)
   } finally {
     if (item) item._loading = false
+  }
+}
+
+async function batchApproveAll() {
+  try {
+    await ElMessageBox.confirm(
+      `確定要核准全部 ${pendingCount.value} 筆審核項目？`,
+      '批次核准',
+      { type: 'warning', confirmButtonText: '確定', cancelButtonText: '取消' }
+    )
+  } catch { return }
+  batchLoading.value = true
+  try {
+    const res = await ontologyApi.batchApprove({ all: true })
+    ElMessage.success(`已核准 ${res.approved} 筆`)
+    await loadReviewQueue()
+    await loadGraph()
+  } catch (e) {
+    ElMessage.error(e.message || '批次核准失敗')
+  } finally {
+    batchLoading.value = false
+  }
+}
+
+async function batchRejectAll() {
+  try {
+    await ElMessageBox.confirm(
+      `確定要拒絕全部 ${pendingCount.value} 筆審核項目？拒絕後會加入封鎖清單。`,
+      '批次拒絕',
+      { type: 'warning', confirmButtonText: '確定拒絕', cancelButtonText: '取消' }
+    )
+  } catch { return }
+  batchLoading.value = true
+  try {
+    const res = await ontologyApi.batchReject({ all: true })
+    ElMessage.success(`已拒絕 ${res.rejected} 筆`)
+    await loadReviewQueue()
+    await loadBlocklist()
+  } catch (e) {
+    ElMessage.error(e.message || '批次拒絕失敗')
+  } finally {
+    batchLoading.value = false
   }
 }
 

@@ -221,6 +221,22 @@ async def verify_model(
                     avail_str = ", ".join(available[:5]) or "（無）"
                     return {"ok": False, "message": f"模型 '{body.model_name}' 未找到\n可用: {avail_str}"}
                 return {"ok": True, "message": f"✓ {body.model_name or 'Ollama'} 連線成功"}
+            elif body.provider == "anthropic":
+                try:
+                    async with httpx.AsyncClient(timeout=8) as client:
+                        resp = await client.get(
+                            "https://api.anthropic.com/v1/models",
+                            headers={
+                                "x-api-key": effective_key or "",
+                                "anthropic-version": "2023-06-01",
+                            }
+                        )
+                    if resp.status_code == 200:
+                        return {"ok": True, "message": "Anthropic 連線成功"}
+                    else:
+                        return {"ok": False, "message": f"Anthropic 驗證失敗：HTTP {resp.status_code}"}
+                except Exception as e:
+                    return {"ok": False, "message": f"連線失敗：{e}"}
             elif body.provider in _TEST_URLS:
                 if not effective_key:
                     return {"ok": False, "message": "需要 API Key"}

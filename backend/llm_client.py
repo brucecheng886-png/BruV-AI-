@@ -54,6 +54,8 @@ async def llm_stream(
     settings,
     model_override: str | None = None,
     config_override: dict | None = None,
+    temperature: float = 0.7,
+    max_tokens: int = 2048,
 ) -> AsyncIterator[str]:
     """
     統一串流介面，yield 每個 token 文字字串。
@@ -64,15 +66,25 @@ async def llm_stream(
     model    = model_override or override.get("model") or _resolve_model(settings)
 
     if provider == "ollama":
-        async for token in _ollama_stream(messages, model, settings):
+        async for token in _ollama_stream(messages, model, settings, temperature=temperature, max_tokens=max_tokens):
+            yield token
+    elif provider == "anthropic":
+        api_key_override = override.get("api_key")
+        async for token in _anthropic_stream(
+            messages, model, settings,
+            api_key_override=api_key_override,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        ):
             yield token
     else:
-        # 用 DB 存的 api_key 覆蓋 env
         api_key_override = override.get("api_key")
         async for token in _openai_compat_stream(
             messages, model, settings,
             provider_override=provider,
             api_key_override=api_key_override,
+            temperature=temperature,
+            max_tokens=max_tokens,
         ):
             yield token
 
@@ -83,12 +95,15 @@ async def _ollama_stream(
     messages: list[dict],
     model: str,
     settings,
+    temperature: float = 0.7,
+    max_tokens: int = 2048,
 ) -> AsyncIterator[str]:
     async with httpx.AsyncClient(timeout=300) as client:
         async with client.stream(
             "POST",
             f"{settings.OLLAMA_BASE_URL}/api/chat",
-            json={"model": model, "messages": messages, "stream": True},
+            json={"model": model, "messages": messages, "stream": True,
+                  "options": {"temperature": temperature, "num_predict": max_tokens}},
         ) as resp:
             resp.raise_for_status()
             async for line in resp.aiter_lines():
@@ -113,6 +128,8 @@ async def _openai_compat_stream(
     settings,
     provider_override: str | None = None,
     api_key_override: str | None = None,
+    temperature: float = 0.7,
+    max_tokens: int = 2048,
 ) -> AsyncIterator[str]:
     provider = provider_override or settings.LLM_PROVIDER
     base_url = _PROVIDER_BASE_URLS.get(provider, "")
@@ -137,9 +154,11 @@ async def _openai_compat_stream(
         headers["X-Title"]      = "BruV AI KB"
 
     payload = {
-        "model":    model,
-        "messages": messages,
-        "stream":   True,
+        "model":       model,
+        "messages":    messages,
+        "stream":      True,
+        "temperature": temperature,
+        "max_tokens":  max_tokens,
     }
 
     async with httpx.AsyncClient(timeout=300) as client:
@@ -164,3 +183,70 @@ async def _openai_compat_stream(
                              .get("delta", {}).get("content", "")
                 if token:
                     yield token
+
+
+# ── Anthropic 串流（Messages API）────────────────────────────────────────────
+
+async def _anthropic_stream(
+    messages: list[dict],
+    model: str,
+    settings,
+    api_key_override: str | None = None,
+    temperature: float = 0.7,
+    max_tokens: int = 2048,
+) -> AsyncIterator[str]:
+    api_key = api_key_override or getattr(settings, "ANTHROPIC_API_KEY", "")
+    if not api_key:
+        yield "[錯誤：請在設定頁輸入 ANTHROPIC API Key]"
+        return
+
+    # Anthropic 不接受 system 角色在 messages 裡，需分離
+    system_parts = [m["content"] for m in messages if m["role"] == "system"]
+    user_messages = [m for m in messages if m["role"] != "system"]
+    system_prompt = "\n\n".join(system_parts) if system_parts else None
+
+    payload: dict = {
+        "model": model,
+        "max_tokens": max_tokens,
+        "messages": user_messages,
+        "stream": True,
+        "temperature": temperature,
+    }
+    if system_prompt:
+        payload["system"] = system_prompt
+
+    headers = {
+        "x-api-key": api_key,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+    }
+
+    async with httpx.AsyncClient(timeout=300) as client:
+        async with client.stream(
+            "POST",
+            "https://api.anthropic.com/v1/messages",
+            headers=headers,
+            json=payload,
+        ) as resp:
+            if resp.status_code != 200:
+                body = await resp.aread()
+                logger.error("Anthropic error %s: %s", resp.status_code, body[:200])
+                yield f"[Anthropic 錯誤 {resp.status_code}]"
+                return
+            async for line in resp.aiter_lines():
+                if not line.startswith("data:"):
+                    continue
+                data = line[5:].strip()
+                if not data:
+                    continue
+                try:
+                    chunk = json.loads(data)
+                except json.JSONDecodeError:
+                    continue
+                chunk_type = chunk.get("type", "")
+                if chunk_type == "content_block_delta":
+                    token = chunk.get("delta", {}).get("text", "")
+                    if token:
+                        yield token
+                elif chunk_type == "message_stop":
+                    break

@@ -25,6 +25,8 @@
       </div>
     </div>
   </div>
+  <!-- 分隔線：fixed 定位放在 overlay 下方，確保延伸到最右側 -->
+  <div class="titlebar-divider" />
 </template>
 
 <script setup>
@@ -36,8 +38,8 @@ function call(method) {
 <style scoped>
 .titlebar {
   height: 38px;
-  background: #f1f5f9;
-  border-bottom: 1px solid #e2e8f0;
+  background: #f0f0f0;
+  border-bottom: none;
   display: flex;
   align-items: center;
   -webkit-app-region: drag;
@@ -66,14 +68,26 @@ function call(method) {
   height: 38px;
   padding: 0 12px;
   font-size: 13px;
-  color: #475569;
+  color: #333;
   cursor: pointer;
   border-radius: 4px;
   transition: background 0.12s;
 }
 
 .menu-trigger:hover {
-  background: #e2e8f0;
-  color: #1e293b;
+  background: #ddd;
+  color: #111;
+}
+
+/* 全寬分隔線：fixed 在 titlebar 正下方，不受 overlay 裁切 */
+.titlebar-divider {
+  position: fixed;
+  top: 38px;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: #b0b8c4;
+  z-index: 100;
+  -webkit-app-region: no-drag;
 }
 </style>

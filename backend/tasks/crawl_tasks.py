@@ -1,13 +1,15 @@
 """
 爬蟲 Celery 任務
 
-Pipeline：
-  playwright /fetch → BeautifulSoup inner_text → SentenceWindow 分塊
-  → bge-m3 嵌入 → Qdrant 寫入 → LLM 實體分析 → Neo4j 寫入
-  → PG chunks 寫入 → 更新文件狀態
+Pipeline（Saga 正確順序）：
+  playwright /fetch → MinIO HTML 儲存 → BeautifulSoup inner_text → SentenceWindow 分塊
+  → bge-m3 嵌入 → LLM 實體分析 → PG chunks 寫入 → Qdrant 寫入 → Neo4j 寫入
+  → OntologyReviewQueue INSERT → 更新文件狀態
 
+crawl_batch_task：批量提交（SHA256 去重 → 建立文件 → 逐一 crawl_document）
 所有跨庫操作由 SagaLog 保護（必要元件）。
 """
+import hashlib
 import json
 import logging
 import re
@@ -161,7 +163,7 @@ def _llm_extract(sample: str, model: str, base_url: str) -> dict:
     name="tasks.crawl_document",
 )
 def crawl_document(self, doc_id: str, url: str):
-    """爬蟲主任務：playwright fetch → HTML 分塊 → 三庫寫入（Saga 保護）"""
+    """爬蟲任務：playwright fetch → 儲存 HTML → 交棒 ingest_document"""
     logger.info(
         "[task:%s] Starting crawl doc_id=%s url=%s",
         self.request.id, doc_id, url,
@@ -183,7 +185,7 @@ def crawl_document(self, doc_id: str, url: str):
 
     title = row[0]
 
-    # 2. playwright /fetch → html + title
+    # 2. Playwright /fetch → html + title
     with httpx.Client(timeout=60) as client:
         resp = client.post(
             f"{s.PLAYWRIGHT_SERVICE_URL}/fetch",
@@ -196,146 +198,111 @@ def crawl_document(self, doc_id: str, url: str):
     fetched_title = fetch_data.get("title", "").strip()
     display_title = fetched_title or title
 
-    # 3. BeautifulSoup inner_text
-    text = _html_to_text(html)
-
-    if not text.strip():
+    if not html.strip():
         with _pg_conn() as pg:
             with pg.cursor() as cur:
                 cur.execute(
-                    "UPDATE documents SET status='indexed', chunk_count=0 WHERE id=%s",
+                    "UPDATE documents SET status='failed', error_message='頁面無內容' WHERE id=%s",
                     (doc_id,),
                 )
             pg.commit()
         logger.info("[task:%s] Empty page doc_id=%s", self.request.id, doc_id)
         return
 
-    # 4. SentenceWindow 分塊
-    raw_chunks = _sentence_window_chunks(text)
+    # 3. 儲存原始 HTML 至 MinIO
+    from io import BytesIO
+    from minio import Minio
+    html_bytes = html.encode("utf-8")
+    minio_key  = f"raw_html/{doc_id}.html"
+    mc = Minio(
+        s.MINIO_ENDPOINT,
+        access_key=s.MINIO_ACCESS_KEY,
+        secret_key=s.MINIO_SECRET_KEY,
+        secure=False,
+    )
+    if not mc.bucket_exists(s.MINIO_BUCKET):
+        mc.make_bucket(s.MINIO_BUCKET)
+    mc.put_object(
+        s.MINIO_BUCKET, minio_key,
+        BytesIO(html_bytes), len(html_bytes),
+        content_type="text/html",
+    )
 
-    if not raw_chunks:
-        with _pg_conn() as pg:
-            with pg.cursor() as cur:
-                cur.execute(
-                    "UPDATE documents SET status='indexed', chunk_count=0 WHERE id=%s",
-                    (doc_id,),
-                )
-            pg.commit()
-        return
-
-    # 5. 更新 PG title（使用頁面實際標題）
+    # 4. PG 更新 title / file_path / file_type
     with _pg_conn() as pg:
         with pg.cursor() as cur:
             cur.execute(
-                "UPDATE documents SET title=%s WHERE id=%s",
-                (display_title, doc_id),
+                "UPDATE documents SET title=%s, file_path=%s, file_type='html' WHERE id=%s",
+                (display_title, minio_key, doc_id),
             )
         pg.commit()
 
-    # 6. bge-m3 嵌入
-    vectors   = _embed_texts(
-        [c["content"] for c in raw_chunks],
-        s.OLLAMA_EMBED_MODEL,
-        s.OLLAMA_BASE_URL,
+    logger.info(
+        "[task:%s] HTML stored, handing off to ingest_document doc_id=%s",
+        self.request.id, doc_id,
     )
-    chunk_ids  = [str(uuid.uuid4()) for _ in raw_chunks]
-    qdrant_ids = [str(uuid.uuid4()) for _ in raw_chunks]
 
-    # 7-10. Saga 三庫寫入
-    from services.saga import SagaLog
-    saga = SagaLog("crawl_document", doc_id)
-    saga.begin()
+    # 5. 交棒 ingest_document（parse/chunk/embed/LLM/KB分類/Tag建議/Neo4j）
+    from tasks.document_tasks import ingest_document
+    ingest_document.delay(doc_id)
 
-    try:
-        # ── Qdrant ──────────────────────────────────────────
-        qdrant = _qdrant()
-        points = [
-            PointStruct(
-                id=qid,
-                vector=vec,
-                payload={
-                    "doc_id":      doc_id,
-                    "content":     c["content"],
-                    "page_number": c["page_number"],
-                    "title":       display_title,
-                    "source_url":  url,
-                },
-            )
-            for qid, vec, c in zip(qdrant_ids, vectors, raw_chunks)
-        ]
-        qdrant.upsert(collection_name=s.QDRANT_COLLECTION, points=points)
-        saga.record_step("qdrant")
 
-        # ── LLM 分析 ────────────────────────────────────────
-        sample   = " ".join(c["content"] for c in raw_chunks[:10])[:3000]
-        analysis = _llm_extract(sample, s.OLLAMA_LLM_MODEL, s.OLLAMA_BASE_URL)
+# ── 批量爬蟲任務 ────────────────────────────────────────────────
 
-        # ── Neo4j ────────────────────────────────────────────
-        neo_driver = _neo4j()
-        with neo_driver.session(database="neo4j") as neo_sess:
-            neo_sess.run(
-                "MERGE (d:Document {id:$doc_id}) "
-                "SET d.title=$title, d.tags=$tags, d.summary=$summary, d.source_url=$url",
-                doc_id=doc_id, title=display_title,
-                tags=analysis.get("tags", []),
-                summary=analysis.get("summary", ""),
-                url=url,
-            )
-            for entity in analysis.get("entities", []):
-                neo_sess.run(
-                    """
-                    MERGE (e:Entity {name: $name})
-                    SET e.type=$etype, e.description=$desc
-                    WITH e
-                    MATCH (d:Document {id: $doc_id})
-                    MERGE (d)-[:MENTIONS]->(e)
-                    """,
-                    name=entity.get("name", ""),
-                    etype=entity.get("type", "CONCEPT"),
-                    desc=entity.get("description", ""),
-                    doc_id=doc_id,
-                )
-        neo_driver.close()
-        saga.record_step("neo4j")
+@shared_task(
+    bind=True,
+    name="tasks.crawl_batch_task",
+    max_retries=0,
+)
+def crawl_batch_task(self, batch_id: str, urls: list, user_id: str = None):
+    """批量爬蟲：SHA256 去重 → 建立文件記錄 → 提交 crawl_document 任務"""
+    queued  = 0
+    skipped = 0
 
-        # ── PG chunks ────────────────────────────────────────
-        with _pg_conn() as pg:
-            with pg.cursor() as cur:
-                for i, (c, qid, cid) in enumerate(
-                        zip(raw_chunks, qdrant_ids, chunk_ids)):
+    for url in urls:
+        doc_id = str(uuid.uuid4())
+        fp     = hashlib.sha256(url.encode("utf-8")).hexdigest()
+        try:
+            with _pg_conn() as pg:
+                with pg.cursor() as cur:
                     cur.execute(
                         """
-                        INSERT INTO chunks
-                          (id, doc_id, content, chunk_index, vector_id, window_context, page_number)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        INSERT INTO documents
+                          (id, title, source, file_type, status,
+                           url_fingerprint, batch_id, created_by)
+                        VALUES (%s, %s, %s, 'html', 'pending', %s, %s::uuid, %s::uuid)
+                        ON CONFLICT (url_fingerprint)
+                        WHERE url_fingerprint IS NOT NULL DO NOTHING
+                        RETURNING id
                         """,
-                        (cid, doc_id, c["content"], i, qid,
-                         c["window_context"], c["page_number"]),
+                        (doc_id, url[:200], url, fp, batch_id, user_id),
                     )
-                cur.execute(
-                    "UPDATE documents SET status='indexed', chunk_count=%s WHERE id=%s",
-                    (len(raw_chunks), doc_id),
-                )
-            pg.commit()
-        saga.record_step("postgres")
+                    row = cur.fetchone()
+                pg.commit()
+        except Exception as insert_err:
+            logger.warning("[batch:%s] 插入文件失敗 url=%s: %s", batch_id, url[:80], insert_err)
+            skipped += 1
+            continue
 
-        saga.commit()
-        logger.info(
-            "[task:%s] Crawled doc_id=%s: %d chunks url=%s",
-            self.request.id, doc_id, len(raw_chunks), url,
-        )
+        if row:
+            crawl_document.delay(doc_id, url)
+            queued += 1
+        else:
+            skipped += 1
 
-    except Exception as exc:
-        saga.mark_compensated(error=str(exc))
+    # 更新批次：total = 實際提交數
+    try:
         with _pg_conn() as pg:
             with pg.cursor() as cur:
                 cur.execute(
-                    "UPDATE documents SET status='failed', error_message=%s WHERE id=%s",
-                    (str(exc)[:500], doc_id),
+                    "UPDATE crawl_batches SET total=%s, status='running' WHERE id=%s",
+                    (queued, batch_id),
                 )
             pg.commit()
-        logger.error(
-            "[task:%s] Crawl failed doc_id=%s: %s",
-            self.request.id, doc_id, exc, exc_info=True,
-        )
-        raise
+    except Exception as upd_err:
+        logger.warning("[batch:%s] 更新批次狀態失敗: %s", batch_id, upd_err)
+
+    logger.info(
+        "[batch:%s] 完成分派：queued=%d skipped=%d total_urls=%d",
+        batch_id, queued, skipped, len(urls),
+    )

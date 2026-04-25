@@ -184,7 +184,7 @@
 </template>
 
 <script setup>
-import { ref, computed, reactive, onMounted } from 'vue'
+import { ref, computed, reactive, onMounted, onActivated } from 'vue'
 import { pluginsApi } from '../api/index.js'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
@@ -214,7 +214,21 @@ const configForm  = reactive({ name: '', description: '', endpoint: '', auth_hea
 const webhookForm = reactive({ name: '', description: '', endpoint: '', auth_header: '' })
 const testForm    = reactive({ action: '', params: '{}' })
 
-onMounted(() => { loadInstalled(); loadCatalog() })
+let _pluginsMounting = false
+onMounted(async () => {
+  _pluginsMounting = true
+  try {
+    await loadInstalled()
+    await loadCatalog()
+  } finally {
+    _pluginsMounting = false
+  }
+})
+onActivated(async () => {
+  if (_pluginsMounting) return
+  await loadInstalled()
+  await loadCatalog()
+})
 
 async function loadInstalled() {
   loadingInstalled.value = true

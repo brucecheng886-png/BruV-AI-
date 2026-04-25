@@ -5,8 +5,10 @@ POST /api/settings/llm            儲存 LLM 設定
 POST /api/settings/llm/test       測試連線
 GET  /api/settings/models         取得可用模型列表（帶即時檢測）
 GET  /api/settings/rag            讀取 RAG 參數
-POST /api/settings/rag            儲存 RAG 參數
-POST /api/settings/backup/trigger 手動觸發備份
+POST /api/settings/rag            儲存 RAG 參數GET  /api/settings/chat           讀取對話行為設定
+POST /api/settings/chat           儲存對話行為設定
+GET  /api/settings/schema         讀取知識庫 Schema
+PUT  /api/settings/schema         儲存知識庫 SchemaPOST /api/settings/backup/trigger 手動觸發備份
 GET  /api/settings/backup/list    列出備份檔案
 POST /api/settings/user/change-password 修改密碼
 """
@@ -37,6 +39,7 @@ _LLM_KEYS = [
     "groq_api_key",
     "gemini_api_key",
     "openrouter_api_key",
+    "anthropic_api_key",
 ]
 
 _PROVIDER_TEST_URLS = {
@@ -44,6 +47,7 @@ _PROVIDER_TEST_URLS = {
     "groq":       "https://api.groq.com/openai/v1/models",
     "gemini":     "https://generativelanguage.googleapis.com/v1beta/openai/models",
     "openrouter": "https://openrouter.ai/api/v1/models",
+    "anthropic":  "https://api.anthropic.com/v1/models",
 }
 
 
@@ -85,6 +89,7 @@ class LlmSettingsOut(BaseModel):
     groq_api_key_masked: str
     gemini_api_key_masked: str
     openrouter_api_key_masked: str
+    anthropic_api_key_masked: str
 
 
 class LlmSettingsIn(BaseModel):
@@ -94,6 +99,7 @@ class LlmSettingsIn(BaseModel):
     groq_api_key: Optional[str] = None
     gemini_api_key: Optional[str] = None
     openrouter_api_key: Optional[str] = None
+    anthropic_api_key: Optional[str] = None
 
 
 class TestBody(BaseModel):
@@ -119,6 +125,7 @@ async def get_llm_settings(
         groq_api_key_masked=_mask(rows.get("groq_api_key", "")),
         gemini_api_key_masked=_mask(rows.get("gemini_api_key", "")),
         openrouter_api_key_masked=_mask(rows.get("openrouter_api_key", "")),
+        anthropic_api_key_masked=_mask(rows.get("anthropic_api_key", "")),
     )
 
 
@@ -138,6 +145,7 @@ async def save_llm_settings(
         ("groq_api_key",       "groq_api_key"),
         ("gemini_api_key",     "gemini_api_key"),
         ("openrouter_api_key", "openrouter_api_key"),
+        ("anthropic_api_key",  "anthropic_api_key"),
     ]:
         val = getattr(body, field)
         if val is not None:
@@ -158,11 +166,29 @@ async def test_llm_connection(
     body: TestBody,
     current_user: CurrentUser = None,
 ):
+    if not body.api_key:
+        raise HTTPException(status_code=400, detail="api_key 不能為空")
+
+    # Anthropic 用自己的 header 格式
+    if body.provider == "anthropic":
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.get(
+                    "https://api.anthropic.com/v1/models",
+                    headers={
+                        "x-api-key": body.api_key,
+                        "anthropic-version": "2023-06-01",
+                    },
+                )
+            if resp.status_code == 200:
+                return {"ok": True, "message": "連線成功"}
+            return {"ok": False, "message": f"HTTP {resp.status_code}: {resp.text[:200]}"}
+        except Exception as e:
+            return {"ok": False, "message": str(e)}
+
     url = _PROVIDER_TEST_URLS.get(body.provider)
     if not url:
         raise HTTPException(status_code=400, detail=f"不支援的 provider: {body.provider}")
-    if not body.api_key:
-        raise HTTPException(status_code=400, detail="api_key 不能為空")
 
     headers = {"Authorization": f"Bearer {body.api_key}"}
     if body.provider == "openrouter":
@@ -187,6 +213,7 @@ _CLOUD_DEFAULTS = {
     "groq":       "llama-3.3-70b-versatile",
     "gemini":     "gemini-2.0-flash",
     "openrouter": "meta-llama/llama-3.3-70b-instruct:free",
+    "anthropic":  "claude-sonnet-4-6",
 }
 
 _OPENAI_SKIP = ("embed", "audio", "tts", "whisper", "dall-e", "realtime", "vision-preview")
@@ -197,7 +224,7 @@ async def get_available_models(
     db: AsyncSession = Depends(get_db),
     current_user: CurrentUser = None,
 ):
-    """即時檢測並回傳當前 provider 的可用模型清單"""
+    """即時檢測並回傳當前 provider 的可用模型清單（含地端/雲端分組）"""
     result = await db.execute(
         select(SystemSetting).where(SystemSetting.key.in_(_LLM_KEYS))
     )
@@ -206,46 +233,77 @@ async def get_available_models(
     provider = rows.get("llm_provider", "").strip() or app_settings.LLM_PROVIDER
     db_default = rows.get("cloud_llm_model", "").strip() or None
 
-    models: list[str] = []
+    # ── 地端：一律嘗試抓 Ollama 模型 ─────────────────────────────────
+    local_models: list[str] = []
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            resp = await client.get(f"{app_settings.OLLAMA_BASE_URL}/api/tags")
+        if resp.status_code == 200:
+            local_models = [
+                m["name"] for m in resp.json().get("models", [])
+                if not any(k in m["name"].lower() for k in _EMBED_KEYWORDS)
+            ]
+    except Exception:
+        pass
+    if not local_models:
+        local_models = [app_settings.OLLAMA_LLM_MODEL]
 
-    if provider == "ollama" or not provider:
-        default_model = db_default or app_settings.OLLAMA_LLM_MODEL
-        try:
-            async with httpx.AsyncClient(timeout=5) as client:
-                resp = await client.get(f"{app_settings.OLLAMA_BASE_URL}/api/tags")
-            if resp.status_code == 200:
-                models = [
-                    m["name"] for m in resp.json().get("models", [])
-                    if not any(k in m["name"].lower() for k in _EMBED_KEYWORDS)
-                ]
-        except Exception:
-            pass
-        if not models:
-            models = [default_model]
-    else:
-        default_model = db_default or _CLOUD_DEFAULTS.get(provider, "")
-        api_key = rows.get(f"{provider}_api_key", "").strip()
-        url = _PROVIDER_TEST_URLS.get(provider, "")
-
+    # ── 雲端：依設定的 cloud provider 抓清單 ────────────────────────
+    cloud_models: list[str] = []
+    cloud_provider = provider if provider != "ollama" else None
+    if cloud_provider:
+        api_key = rows.get(f"{cloud_provider}_api_key", "").strip()
+        url = _PROVIDER_TEST_URLS.get(cloud_provider, "")
         if api_key and url:
             try:
-                headers: dict = {"Authorization": f"Bearer {api_key}"}
-                if provider == "openrouter":
-                    headers["HTTP-Referer"] = "http://localhost"
+                # Anthropic 用自己的 header 格式
+                if cloud_provider == "anthropic":
+                    headers: dict = {
+                        "x-api-key": api_key,
+                        "anthropic-version": "2023-06-01",
+                    }
+                else:
+                    headers = {"Authorization": f"Bearer {api_key}"}
+                    if cloud_provider == "openrouter":
+                        headers["HTTP-Referer"] = "http://localhost"
                 async with httpx.AsyncClient(timeout=8) as client:
                     resp = await client.get(url, headers=headers)
                 if resp.status_code == 200:
-                    all_ids = [m["id"] for m in resp.json().get("data", [])]
-                    models = [
-                        m for m in all_ids
-                        if not any(k in m.lower() for k in _OPENAI_SKIP)
-                    ]
+                    data_key = "data" if cloud_provider != "anthropic" else "models"
+                    all_ids = [m.get("id", m) for m in resp.json().get(data_key, [])]
+                    if cloud_provider == "anthropic":
+                        # Anthropic 固定提供三個推薦模型（不過濾 API 回傳）
+                        cloud_models = ["claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5"]
+                    else:
+                        cloud_models = [
+                            m for m in all_ids
+                            if not any(k in m.lower() for k in _OPENAI_SKIP)
+                        ]
             except Exception:
                 pass
-        if not models and default_model:
-            models = [default_model]
+        if not cloud_models:
+            if cloud_provider == "anthropic":
+                cloud_models = ["claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5"]
+            else:
+                cloud_default = db_default or _CLOUD_DEFAULTS.get(cloud_provider, "")
+                if cloud_default:
+                    cloud_models = [cloud_default]
 
-    return {"models": models, "default": default_model, "provider": provider}
+    # ── 預設模型 ─────────────────────────────────────────────────────
+    if provider == "ollama" or not cloud_provider:
+        default_model = db_default or app_settings.OLLAMA_LLM_MODEL
+    else:
+        default_model = db_default or _CLOUD_DEFAULTS.get(provider, "")
+
+    all_models = local_models + [m for m in cloud_models if m not in local_models]
+
+    return {
+        "models": all_models,
+        "local": local_models,
+        "cloud": cloud_models,
+        "default": default_model,
+        "provider": provider,
+    }
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -257,6 +315,7 @@ _RAG_DEFAULTS = {
     "rag_rerank_top_k":      "5",
     "rag_max_context_chars": "4000",
     "rag_rerank_enabled":    "true",
+    "doc_chunk_size":        "400",
 }
 _RAG_KEYS = list(_RAG_DEFAULTS.keys())
 
@@ -266,6 +325,7 @@ class RagSettingsOut(BaseModel):
     rag_rerank_top_k: int
     rag_max_context_chars: int
     rag_rerank_enabled: bool
+    doc_chunk_size: int
 
 
 class RagSettingsIn(BaseModel):
@@ -273,6 +333,7 @@ class RagSettingsIn(BaseModel):
     rag_rerank_top_k: int = 5
     rag_max_context_chars: int = 4000
     rag_rerank_enabled: bool = True
+    doc_chunk_size: int = 400
 
 
 async def get_rag_runtime_config(db: AsyncSession) -> dict:
@@ -286,6 +347,7 @@ async def get_rag_runtime_config(db: AsyncSession) -> dict:
         "rerank_top_k":      int(rows.get("rag_rerank_top_k",      _RAG_DEFAULTS["rag_rerank_top_k"])),
         "max_context_chars": int(rows.get("rag_max_context_chars", _RAG_DEFAULTS["rag_max_context_chars"])),
         "rerank_enabled":    rows.get("rag_rerank_enabled",        _RAG_DEFAULTS["rag_rerank_enabled"]) == "true",
+        "chunk_size":        int(rows.get("doc_chunk_size",        _RAG_DEFAULTS["doc_chunk_size"])),
     }
 
 
@@ -303,6 +365,7 @@ async def get_rag_settings(
         rag_rerank_top_k=int(rows.get("rag_rerank_top_k", _RAG_DEFAULTS["rag_rerank_top_k"])),
         rag_max_context_chars=int(rows.get("rag_max_context_chars", _RAG_DEFAULTS["rag_max_context_chars"])),
         rag_rerank_enabled=(rows.get("rag_rerank_enabled", _RAG_DEFAULTS["rag_rerank_enabled"]) == "true"),
+        doc_chunk_size=int(rows.get("doc_chunk_size", _RAG_DEFAULTS["doc_chunk_size"])),
     )
 
 
@@ -312,11 +375,20 @@ async def save_rag_settings(
     db: AsyncSession = Depends(get_db),
     current_user: CurrentUser = None,
 ):
+    if not (1 <= body.rag_top_k <= 100):
+        raise HTTPException(status_code=400, detail="top_k 需介於 1 ~ 100")
+    if not (1 <= body.rag_rerank_top_k <= body.rag_top_k):
+        raise HTTPException(status_code=400, detail="rerank_top_k 需介於 1 ~ top_k")
+    if not (500 <= body.rag_max_context_chars <= 32000):
+        raise HTTPException(status_code=400, detail="max_context_chars 需介於 500 ~ 32000")
+    if not (100 <= body.doc_chunk_size <= 2000):
+        raise HTTPException(status_code=400, detail="Chunk 大小需介於 100 ~ 2000")
     updates = {
         "rag_top_k":             str(body.rag_top_k),
         "rag_rerank_top_k":      str(body.rag_rerank_top_k),
         "rag_max_context_chars": str(body.rag_max_context_chars),
         "rag_rerank_enabled":    "true" if body.rag_rerank_enabled else "false",
+        "doc_chunk_size":        str(body.doc_chunk_size),
     }
     for k, v in updates.items():
         existing = await db.get(SystemSetting, k)
@@ -495,13 +567,103 @@ async def save_schema(
     db: AsyncSession = Depends(get_db),
     current_user: CurrentUser = None,
 ):
-    if len(body.schema_text) > 8000:
-        raise HTTPException(status_code=400, detail="Schema 文字不得超過 8000 字元")
     existing = await db.get(SystemSetting, _SCHEMA_KEY)
     if existing:
         existing.value = body.schema_text
     else:
         db.add(SystemSetting(key=_SCHEMA_KEY, value=body.schema_text))
+    await db.commit()
+    return {"ok": True}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 對話行為設定（Temperature / Max Tokens / 歷史輪數 / System Prompt / Chunk Size）
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_CHAT_DEFAULTS = {
+    "chat_temperature":    "0.7",
+    "chat_max_tokens":     "2048",
+    "chat_history_rounds": "10",
+    "chat_system_prompt":  "",
+    "doc_analysis_model":  "",
+}
+_CHAT_KEYS = list(_CHAT_DEFAULTS.keys())
+
+
+class ChatSettingsOut(BaseModel):
+    chat_temperature: float
+    chat_max_tokens: int
+    chat_history_rounds: int
+    chat_system_prompt: str
+    doc_analysis_model: str = ""
+
+
+class ChatSettingsIn(BaseModel):
+    chat_temperature: float = 0.7
+    chat_max_tokens: int = 2048
+    chat_history_rounds: int = 10
+    chat_system_prompt: str = ""
+    doc_analysis_model: str = ""
+
+
+async def get_chat_runtime_config(db: AsyncSession) -> dict:
+    """供 chat.py / document_tasks.py 呼叫：讀取對話行為動態設定"""
+    result = await db.execute(
+        select(SystemSetting).where(SystemSetting.key.in_(_CHAT_KEYS))
+    )
+    rows = {r.key: r.value for r in result.scalars()}
+    return {
+        "temperature":    float(rows.get("chat_temperature",    _CHAT_DEFAULTS["chat_temperature"])),
+        "max_tokens":     int(rows.get("chat_max_tokens",       _CHAT_DEFAULTS["chat_max_tokens"])),
+        "history_rounds": int(rows.get("chat_history_rounds",   _CHAT_DEFAULTS["chat_history_rounds"])),
+        "system_prompt":  rows.get("chat_system_prompt",        _CHAT_DEFAULTS["chat_system_prompt"]),
+    }
+
+
+@router.get("/chat", response_model=ChatSettingsOut)
+async def get_chat_settings(
+    db: AsyncSession = Depends(get_db),
+    current_user: CurrentUser = None,
+):
+    result = await db.execute(
+        select(SystemSetting).where(SystemSetting.key.in_(_CHAT_KEYS))
+    )
+    rows = {r.key: r.value for r in result.scalars()}
+    return ChatSettingsOut(
+        chat_temperature=float(rows.get("chat_temperature",     _CHAT_DEFAULTS["chat_temperature"])),
+        chat_max_tokens=int(rows.get("chat_max_tokens",         _CHAT_DEFAULTS["chat_max_tokens"])),
+        chat_history_rounds=int(rows.get("chat_history_rounds", _CHAT_DEFAULTS["chat_history_rounds"])),
+        chat_system_prompt=rows.get("chat_system_prompt",       _CHAT_DEFAULTS["chat_system_prompt"]),
+        doc_analysis_model=rows.get("doc_analysis_model",       _CHAT_DEFAULTS["doc_analysis_model"]),
+    )
+
+
+@router.post("/chat")
+async def save_chat_settings(
+    body: ChatSettingsIn,
+    db: AsyncSession = Depends(get_db),
+    current_user: CurrentUser = None,
+):
+    if not (0.0 <= body.chat_temperature <= 2.0):
+        raise HTTPException(status_code=400, detail="Temperature 需介於 0.0 ~ 2.0")
+    if not (256 <= body.chat_max_tokens <= 16384):
+        raise HTTPException(status_code=400, detail="Max tokens 需介於 256 ~ 16384")
+    if not (1 <= body.chat_history_rounds <= 50):
+        raise HTTPException(status_code=400, detail="歷史輪數需介於 1 ~ 50")
+
+    updates = {
+        "chat_temperature":    str(body.chat_temperature),
+        "chat_max_tokens":     str(body.chat_max_tokens),
+        "chat_history_rounds": str(body.chat_history_rounds),
+        "chat_system_prompt":  body.chat_system_prompt,
+        "doc_analysis_model":  body.doc_analysis_model,
+    }
+    for k, v in updates.items():
+        existing = await db.get(SystemSetting, k)
+        if existing:
+            existing.value = v
+        else:
+            db.add(SystemSetting(key=k, value=v))
     await db.commit()
     return {"ok": True}
 

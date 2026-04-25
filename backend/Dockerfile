@@ -8,6 +8,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq-dev \
     curl \
     wget \
+    ffmpeg \
+    nodejs \
     && rm -rf /var/lib/apt/lists/*
 
 # Python 依賴

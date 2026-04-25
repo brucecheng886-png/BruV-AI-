@@ -78,11 +78,12 @@
         <el-button-group>
           <el-button size="small" :type="viewMode==='3d'?'primary':''" @click="viewMode='3d'">3D 圖譜</el-button>
           <el-button size="small" :type="viewMode==='table'?'primary':''" @click="viewMode='table'">表格</el-button>
+          <el-button size="small" :type="viewMode==='stats'?'primary':''" @click="viewMode='stats';loadStats()">權重分布</el-button>
         </el-button-group>
         <el-button size="small" :loading="graphLoading" @click="loadGraph" style="margin-left:8px;">
           <el-icon><Refresh /></el-icon> 重新整理
         </el-button>
-        <span class="pg-hint">節點大小 = 連結度；邊顏色 = 評分深淺；點擊節點開啟 GeneCards</span>
+        <span class="pg-hint">節點大小 = 連結度；Z 軸高度 = 加權度；邊顏色 = 評分深淺；點擊節點開啟 GeneCards</span>
       </div>
 
       <!-- 3D force graph 容器 -->
@@ -102,13 +103,33 @@
           </el-table-column>
         </el-table>
       </div>
+
+      <!-- 權重分布統計視圖 -->
+      <div v-if="viewMode==='stats'" class="pg-stats-panel">
+        <div v-if="statsLoading" style="text-align:center;padding:40px;color:#94a3b8;">載入中...</div>
+        <div v-else-if="statsData" class="stats-content">
+          <div class="stats-summary">
+            <div class="stats-card"><div class="stats-val">{{ statsData.total_edges.toLocaleString() }}</div><div class="stats-lbl">邊總數</div></div>
+            <div class="stats-card"><div class="stats-val">{{ statsData.mean_score }}</div><div class="stats-lbl">平均分</div></div>
+            <div class="stats-card"><div class="stats-val">{{ statsData.p50 }}</div><div class="stats-lbl">中位數 P50</div></div>
+            <div class="stats-card"><div class="stats-val">{{ statsData.p75 }}</div><div class="stats-lbl">P75</div></div>
+            <div class="stats-card"><div class="stats-val">{{ statsData.p90 }}</div><div class="stats-lbl">P90</div></div>
+            <div class="stats-card"><div class="stats-val">{{ statsData.std_score }}</div><div class="stats-lbl">標準差</div></div>
+          </div>
+          <div class="stats-chart-wrap">
+            <div class="stats-chart-title">評分分布直方圖（{{ selectedNetwork }}，閾值 ≥ {{ minScore }}）</div>
+            <canvas ref="statsCanvas" class="stats-canvas" />
+          </div>
+        </div>
+        <el-empty v-else description="尚無統計資料，請先匯入蛋白質互作資料" />
+      </div>
     </div>
 
   </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, computed, onMounted, onActivated, onUnmounted, nextTick, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { UploadFilled, Refresh } from '@element-plus/icons-vue'
 import ForceGraph3D from '3d-force-graph'
@@ -127,6 +148,11 @@ const nodeCount = ref(0)
 const edgeCount = ref(0)
 const allEdges  = ref([])
 const topList   = ref([])
+
+// 統計相關
+const statsLoading = ref(false)
+const statsData    = ref(null)
+const statsCanvas  = ref(null)
 
 const pendingFiles = ref([])
 const uploadRef    = ref(null)
@@ -203,12 +229,85 @@ async function loadTop() {
   } catch {}
 }
 
+// ── 載入統計 ──────────────────────────────────────────────────
+async function loadStats() {
+  if (!selectedNetwork.value) return
+  statsLoading.value = true
+  statsData.value    = null
+  try {
+    const data = await proteinApi.stats(selectedNetwork.value, minScore.value)
+    statsData.value = data
+    await nextTick()
+    _drawStatsChart(data)
+  } catch (e) {
+    ElMessage.error(e.message || '統計載入失敗')
+  } finally {
+    statsLoading.value = false
+  }
+}
+
+function _drawStatsChart(data) {
+  const canvas = statsCanvas.value
+  if (!canvas || !data?.distribution?.length) return
+  const ctx    = canvas.getContext('2d')
+  const dists  = data.distribution
+  const maxCnt = Math.max(...dists.map(d => d.count), 1)
+  const W = canvas.parentElement?.clientWidth  || 700
+  const H = 260
+  canvas.width  = W
+  canvas.height = H
+  ctx.clearRect(0, 0, W, H)
+
+  const padL = 55, padR = 20, padT = 20, padB = 45
+  const chartW = W - padL - padR
+  const chartH = H - padT - padB
+  const barW   = chartW / dists.length
+
+  // 背景
+  ctx.fillStyle = '#0f172a'
+  ctx.fillRect(0, 0, W, H)
+
+  // 格線
+  ctx.strokeStyle = '#334155'
+  ctx.lineWidth   = 0.5
+  for (let i = 0; i <= 4; i++) {
+    const y = padT + chartH - (i / 4) * chartH
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(padL + chartW, y); ctx.stroke()
+    ctx.fillStyle = '#64748b'; ctx.font = '11px monospace'
+    ctx.fillText(Math.round((i / 4) * maxCnt), 4, y + 4)
+  }
+
+  // 柱狀
+  dists.forEach((d, i) => {
+    const ratio   = d.count / maxCnt
+    const barH    = ratio * chartH
+    const x       = padL + i * barW + 2
+    const y       = padT + chartH - barH
+    const hue     = Math.round((1 - ratio) * 200 + 20)
+    ctx.fillStyle = `hsl(${hue},80%,55%)`
+    ctx.fillRect(x, y, barW - 4, barH)
+
+    // X 軸標籤
+    ctx.fillStyle = '#94a3b8'; ctx.font = '10px monospace'
+    ctx.save(); ctx.translate(x + (barW - 4) / 2, padT + chartH + 14); ctx.rotate(-Math.PI / 4)
+    ctx.fillText(d.range_lo.toFixed(2), 0, 0)
+    ctx.restore()
+  })
+
+  // 軸線
+  ctx.strokeStyle = '#475569'; ctx.lineWidth = 1
+  ctx.beginPath(); ctx.moveTo(padL, padT); ctx.lineTo(padL, padT + chartH + 1); ctx.stroke()
+  ctx.beginPath(); ctx.moveTo(padL, padT + chartH); ctx.lineTo(padL + chartW, padT + chartH); ctx.stroke()
+}
+
 // ── 3D 圖初始化 ───────────────────────────────────────────────
 function _scoreToColor(score) {
   // 0 → 藍, 1 → 紅 (HSL)
   const h = Math.round((1 - score) * 240)
   return `hsl(${h},85%,55%)`
 }
+
+const Z_SCALE = 0.5   // Z 軸縮放比（weighted_degree 乘以此值）
 
 function _initGraph(data) {
   if (!container3d.value) return
@@ -221,18 +320,25 @@ function _initGraph(data) {
   const w = container3d.value.clientWidth  || 900
   const h = container3d.value.clientHeight || 600
 
-  // 節點顏色按連結度分層
+  // 預計算最大值（供顏色/Z 軸比例）
   const maxVal = Math.max(...(data.nodes || []).map(n => n.val || 1), 1)
+  const maxWD  = Math.max(...(data.nodes || []).map(n => n.weighted_degree || 0), 1)
+
+  // 設定初始 Z 座標：weighted_degree 越高，Z 越高
+  const nodes = (data.nodes || []).map(n => ({
+    ...n,
+    fz: (n.weighted_degree || 0) / maxWD * 200 * Z_SCALE,
+  }))
 
   graph3d = ForceGraph3D({ controlType: 'orbit' })(container3d.value)
     .width(w).height(h)
     .backgroundColor('#0f172a')
-    .graphData({ nodes: data.nodes || [], links: data.links || [] })
+    .graphData({ nodes, links: data.links || [] })
     // ── 節點 ──
     .nodeLabel(n =>
       `<div style="background:#1e293b;padding:4px 10px;border-radius:6px;font-size:12px;color:#e2e8f0">
         <b>${n.name}</b><br/>
-        <span style="color:#94a3b8">連結度: ${n.val}</span>
+        <span style="color:#94a3b8">連結度: ${n.val} | 加權度: ${(n.weighted_degree || 0).toFixed(2)}</span>
       </div>`
     )
     .nodeColor(n => {
@@ -243,6 +349,8 @@ function _initGraph(data) {
     .nodeVal(n => Math.max(1, Math.log2((n.val || 1) + 1)) * 5)
     .nodeResolution(16)
     .nodeOpacity(0.9)
+    // Z 軸：依 weighted_degree 固定 z 值（強制 z 方向分層）
+    .nodeThreeObject(null)
     // ── 連結 ──
     .linkLabel(l => `${l.source?.name || l.source} ↔ ${l.target?.name || l.target}<br/>score: ${Number(l.value).toFixed(3)}`)
     .linkWidth(l => Math.max(0.3, (l.value || 0) * 3))
@@ -282,21 +390,38 @@ function scoreColor(score) {
 }
 
 // ── resize 處理 ───────────────────────────────────────────────
-let resizeObs = null
-onMounted(async () => {
-  await loadNetworks()
-  if (selectedNetwork.value) {
-    await loadGraph()
-    await loadTop()
-  }
-  resizeObs = new ResizeObserver(() => {
-    if (graph3d && container3d.value) {
-      graph3d.width(container3d.value.clientWidth)
-            .height(container3d.value.clientHeight)
-    }
-  })
-  if (container3d.value) resizeObs.observe(container3d.value)
+// 當 minScore 改變且統計面板開啟時，自動刷新
+watch(minScore, () => {
+  if (viewMode.value === 'stats') loadStats()
 })
+
+let resizeObs = null
+let _proteinMounting = false
+onMounted(async () => {
+  _proteinMounting = true
+  try {
+    await loadNetworks()
+    if (selectedNetwork.value) {
+      await loadGraph()
+      await loadTop()
+    }
+    resizeObs = new ResizeObserver(() => {
+      if (graph3d && container3d.value) {
+        graph3d.width(container3d.value.clientWidth)
+              .height(container3d.value.clientHeight)
+      }
+    })
+    if (container3d.value) resizeObs.observe(container3d.value)
+  } finally {
+    _proteinMounting = false
+  }
+})
+
+onActivated(async () => {
+  if (_proteinMounting) return
+  await loadNetworks()
+})
+
 onUnmounted(() => {
   if (resizeObs) resizeObs.disconnect()
   if (graph3d) { try { graph3d._destructor?.() } catch {} }
@@ -426,6 +551,38 @@ onUnmounted(() => {
   overflow-y: auto;
   padding: 12px;
 }
+
+/* 統計面板 */
+.pg-stats-panel {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px;
+  color: #e2e8f0;
+}
+.stats-content { display: flex; flex-direction: column; gap: 20px; }
+.stats-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.stats-card {
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 10px;
+  padding: 14px 20px;
+  min-width: 120px;
+  text-align: center;
+}
+.stats-val  { font-size: 22px; font-weight: 700; color: #7dd3fc; }
+.stats-lbl  { font-size: 11px; color: #64748b; margin-top: 4px; }
+.stats-chart-wrap {
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 10px;
+  padding: 16px;
+}
+.stats-chart-title { font-size: 12px; color: #94a3b8; margin-bottom: 12px; }
+.stats-canvas { display: block; width: 100%; }
 
 /* Element Plus dark overrides */
 :deep(.el-select .el-input__wrapper) { background: #0f172a; border-color: #334155; }

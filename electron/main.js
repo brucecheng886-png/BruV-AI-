@@ -65,7 +65,7 @@ function createMain () {
     show: false,
     title: 'BruV AI 知識庫',
     titleBarStyle: 'hidden',
-    titleBarOverlay: { color: '#f1f5f9', symbolColor: '#475569', height: 38 },
+    titleBarOverlay: { color: '#f0f0f0', symbolColor: '#333', height: 38 },
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false,

@@ -1,196 +1,120 @@
-<template>
-  <div style="padding:24px;">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:24px;">
-      <h2 style="font-size:20px;margin:0;">設定</h2>
+﻿<template>
+  <div class="settings-root">
+    <div class="settings-header">
+      <h2 class="settings-title">設定</h2>
       <el-button :icon="Refresh" circle title="重新整理頁面" @click="reloadPage" />
     </div>
 
-    <el-tabs v-model="activeTab" @tab-change="onTabChange">
-      <!-- Model Providers Tab -->
-      <el-tab-pane label="模型提供者" name="list">
-        <!-- Provider Cards -->
-        <div class="provider-grid">
-          <div class="provider-card" :class="{ active: selectedProvider === null }" @click="selectedProvider = null">
-            <div class="pcard-icon">🗂</div>
-            <div class="pcard-name">全部</div>
-            <div class="pcard-count">{{ models.length }} 個模型</div>
-          </div>
-          <div v-for="p in PROVIDER_DEFS" :key="p.key"
-               class="provider-card" :class="{ active: selectedProvider === p.key }"
-               @click="selectedProvider = p.key">
-            <div class="pcard-icon">{{ p.icon }}</div>
-            <div class="pcard-name">{{ p.name }}</div>
-            <div class="pcard-types">
-              <el-tag v-for="t in p.types" :key="t" size="small"
-                :type="t === 'embedding' ? 'success' : t === 'rerank' ? 'warning' : ''"
-                style="margin:2px 2px 0 0;">{{ t }}</el-tag>
-            </div>
-            <div class="pcard-count">{{ providerCount(p.key) }} 個模型</div>
-            <el-button size="small" type="primary" plain style="margin-top:8px;width:100%;"
-              @click.stop="openNewDialogForProvider(p.key)">+ 新增</el-button>
-          </div>
-        </div>
+    <div class="group-tabs">
+      <button v-for="g in GROUP_DEFS" :key="g.key"
+        class="group-tab" :class="{ active: activeGroup === g.key }"
+        @click="onGroupChange(g.key)">{{ g.label }}</button>
+    </div>
 
-        <!-- Toolbar -->
-        <div style="display:flex;gap:10px;margin-top:20px;margin-bottom:12px;align-items:center;">
-          <span style="font-size:14px;font-weight:500;">
-            {{ selectedProvider ? (PROVIDER_DEFS.find(p => p.key === selectedProvider)?.name || selectedProvider) : '全部模型' }}
-            （{{ filteredModels.length }}）
-          </span>
-          <el-input v-model="searchQ" placeholder="搜尋模型名稱..." style="width:190px;" clearable @input="loadModels" />
-          <el-button type="primary" @click="openNewDialog">新增模型</el-button>
-        </div>
-
-        <!-- Model Table -->
-        <el-table :data="filteredModels" v-loading="loading" stripe style="width:100%;" empty-text="尚無模型">
-          <el-table-column label="名稱" prop="name" min-width="160" />
-          <el-table-column label="類型" width="100" align="center">
-            <template #default="{ row }">
-              <el-tag size="small"
-                :type="row.model_type === 'embedding' ? 'success' : row.model_type === 'rerank' ? 'warning' : ''">
-                {{ row.model_type || 'chat' }}
-              </el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column label="Provider" min-width="120">
-            <template #default="{ row }">
-              {{ PROVIDER_DEFS.find(p => p.key === row.provider)?.icon || '❓' }}
-              {{ PROVIDER_DEFS.find(p => p.key === row.provider)?.name || row.provider || '-' }}
-            </template>
-          </el-table-column>
-          <el-table-column label="Max tokens" width="110" align="center">
-            <template #default="{ row }">{{ row.max_tokens ? row.max_tokens.toLocaleString() : '-' }}</template>
-          </el-table-column>
-          <el-table-column label="Vision" width="70" align="center">
-            <template #default="{ row }">
-              <el-icon v-if="row.vision_support" color="#67c23a"><Check /></el-icon>
-              <span v-else style="color:#ccc;">—</span>
-            </template>
-          </el-table-column>
-          <el-table-column label="Context" width="90" align="center">
-            <template #default="{ row }">{{ row.context_length ? row.context_length.toLocaleString() : '-' }}</template>
-          </el-table-column>
-          <el-table-column label="操作" width="120" align="center">
-            <template #default="{ row }">
-              <el-button size="small" type="primary" plain @click="openEdit(row)">編輯</el-button>
-              <el-popconfirm title="刪除此模型？" @confirm="deleteModel(row.id)">
-                <template #reference>
-                  <el-button size="small" type="danger" plain>刪</el-button>
+    <div class="settings-body">
+      <template v-if="activeGroup === 'model'">
+        <div class="settings-section">
+          <div class="section-header" style="justify-content:space-between;">
+            <span style="display:flex;align-items:center;gap:8px;">
+              <Cpu :size="16" :stroke-width="1.5" class="section-icon" />
+              <span>模型管理</span>
+            </span>
+            <el-button type="primary" size="small" @click="openNewDialog">新增模型</el-button>
+          </div>
+          <div class="section-body">
+            <!-- 地端模型 -->
+            <div class="model-group-title">地端模型</div>
+            <el-table :data="models.filter(m => m.provider === 'ollama')" v-loading="loading" stripe style="width:100%;" empty-text="尚無地端模型">
+              <el-table-column label="名稱" prop="name" min-width="160" />
+              <el-table-column label="類型" width="100" align="center">
+                <template #default="{ row }">
+                  <el-tag size="small"
+                    :type="row.model_type === 'embedding' ? 'success' : row.model_type === 'rerank' ? 'warning' : ''">
+                    {{ row.model_type || 'chat' }}
+                  </el-tag>
                 </template>
-              </el-popconfirm>
-            </template>
-          </el-table-column>
-        </el-table>
-      </el-tab-pane>
+              </el-table-column>
+              <el-table-column label="Provider" min-width="120">
+                <template #default="{ row }">
+                  {{ PROVIDER_DEFS.find(p => p.key === row.provider)?.name || row.provider || '-' }}
+                </template>
+              </el-table-column>
+              <el-table-column label="Max tokens" width="110" align="center">
+                <template #default="{ row }">{{ row.max_tokens ? row.max_tokens.toLocaleString() : '-' }}</template>
+              </el-table-column>
+              <el-table-column label="Vision" width="70" align="center">
+                <template #default="{ row }">
+                  <el-icon v-if="row.vision_support" color="#67c23a"><Check /></el-icon>
+                  <span v-else style="color:#ccc;">—</span>
+                </template>
+              </el-table-column>
+              <el-table-column label="Context" width="90" align="center">
+                <template #default="{ row }">{{ row.context_length ? row.context_length.toLocaleString() : '-' }}</template>
+              </el-table-column>
+              <el-table-column label="操作" width="120" align="center">
+                <template #default="{ row }">
+                  <el-button size="small" type="primary" plain @click="openEdit(row)">編輯</el-button>
+                  <el-popconfirm title="刪除此模型？" @confirm="deleteModel(row.id)">
+                    <template #reference>
+                      <el-button size="small" type="danger" plain>刪</el-button>
+                    </template>
+                  </el-popconfirm>
+                </template>
+              </el-table-column>
+            </el-table>
 
-      <!-- 模型比較 Tab (第二階段) -->
-      <el-tab-pane v-if="false" label="模型比較" name="compare">
-        <div style="display:flex;gap:20px;margin-bottom:20px;align-items:center;">
-          <div>
-            <div style="font-size:13px;color:#666;margin-bottom:6px;">模型 A</div>
-            <el-select v-model="compareA" placeholder="選擇模型 A" style="width:200px;">
-              <el-option v-for="m in models" :key="m.id" :label="m.name" :value="m.id" />
-            </el-select>
+            <el-divider />
+
+            <!-- 雲端模型 -->
+            <div class="model-group-title">雲端模型</div>
+            <el-table :data="models.filter(m => m.provider !== 'ollama')" v-loading="loading" stripe style="width:100%;" empty-text="尚無雲端模型">
+              <el-table-column label="名稱" prop="name" min-width="160" />
+              <el-table-column label="類型" width="100" align="center">
+                <template #default="{ row }">
+                  <el-tag size="small"
+                    :type="row.model_type === 'embedding' ? 'success' : row.model_type === 'rerank' ? 'warning' : ''">
+                    {{ row.model_type || 'chat' }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="Provider" min-width="120">
+                <template #default="{ row }">
+                  {{ PROVIDER_DEFS.find(p => p.key === row.provider)?.name || row.provider || '-' }}
+                </template>
+              </el-table-column>
+              <el-table-column label="Max tokens" width="110" align="center">
+                <template #default="{ row }">{{ row.max_tokens ? row.max_tokens.toLocaleString() : '-' }}</template>
+              </el-table-column>
+              <el-table-column label="Vision" width="70" align="center">
+                <template #default="{ row }">
+                  <el-icon v-if="row.vision_support" color="#67c23a"><Check /></el-icon>
+                  <span v-else style="color:#ccc;">—</span>
+                </template>
+              </el-table-column>
+              <el-table-column label="Context" width="90" align="center">
+                <template #default="{ row }">{{ row.context_length ? row.context_length.toLocaleString() : '-' }}</template>
+              </el-table-column>
+              <el-table-column label="操作" width="120" align="center">
+                <template #default="{ row }">
+                  <el-button size="small" type="primary" plain @click="openEdit(row)">編輯</el-button>
+                  <el-popconfirm title="刪除此模型？" @confirm="deleteModel(row.id)">
+                    <template #reference>
+                      <el-button size="small" type="danger" plain>刪</el-button>
+                    </template>
+                  </el-popconfirm>
+                </template>
+              </el-table-column>
+            </el-table>
           </div>
-          <div>
-            <div style="font-size:13px;color:#666;margin-bottom:6px;">模型 B</div>
-            <el-select v-model="compareB" placeholder="選擇模型 B" style="width:200px;">
-              <el-option v-for="m in models" :key="m.id" :label="m.name" :value="m.id" />
-            </el-select>
+        </div>
+      </template>
+      <template v-if="activeGroup === 'chat'">
+        <div class="settings-section">
+          <div class="section-header">
+            <Sliders :size="16" :stroke-width="1.5" class="section-icon" />
+            <span>RAG 參數</span>
           </div>
-          <el-button type="primary" :disabled="!compareA || !compareB" @click="doCompare" style="margin-top:20px;">比較</el-button>
-        </div>
-
-        <div v-if="compareResult" style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
-          <ModelCard :model="compareResult.model_a" label="模型 A" />
-          <ModelCard :model="compareResult.model_b" label="模型 B" />
-        </div>
-        <div v-else-if="compareLoading" style="text-align:center;padding:40px;"><el-icon class="is-loading"><Loading /></el-icon></div>
-        <div v-else style="text-align:center;color:#bbb;padding:40px;font-size:14px;">選擇兩個模型後點擊「比較」</div>
-      </el-tab-pane>
-
-      <!-- 雲端 API 設定 Tab (第二階段) -->
-      <el-tab-pane v-if="false" label="雲端 API 設定" name="api">
-        <div v-loading="apiLoading" style="max-width:560px;">
-          <el-alert type="info" :closable="false" style="margin-bottom:20px;">
-            切換 LLM Provider 後對話頁即會使用新的服務，無需重啟。Ollama 嵌入模型不受影響。
-          </el-alert>
-
-          <el-form :model="apiForm" label-width="130px" label-position="left">
-            <!-- Provider -->
-            <el-form-item label="LLM Provider">
-              <el-select v-model="apiForm.llm_provider" style="width:220px;">
-                <el-option value="ollama"     label="🏠 Ollama（本地）" />
-                <el-option value="groq"       label="⚡ Groq（免費額度）" />
-                <el-option value="openai"     label="🤖 OpenAI" />
-                <el-option value="gemini"     label="💎 Google Gemini" />
-                <el-option value="openrouter" label="🌐 OpenRouter" />
-              </el-select>
-            </el-form-item>
-
-            <!-- Cloud model override -->
-            <el-form-item label="模型名稱（選填）">
-              <el-input v-model="apiForm.cloud_llm_model"
-                :placeholder="providerDefaultModel"
-                style="width:320px;" clearable />
-              <div style="font-size:12px;color:#999;margin-top:4px;">留空使用預設：{{ providerDefaultModel }}</div>
-            </el-form-item>
-
-            <!-- Groq -->
-            <template v-if="apiForm.llm_provider === 'groq'">
-              <el-form-item label="Groq API Key">
-                <el-input v-model="apiForm.groq_api_key" type="password" show-password
-                  :placeholder="maskedKeys.groq || '貼上 API Key...'" style="width:320px;" />
-                <el-link href="https://console.groq.com" target="_blank" style="margin-left:8px;font-size:12px;">申請免費 Key ↗</el-link>
-              </el-form-item>
-            </template>
-
-            <!-- OpenAI -->
-            <template v-if="apiForm.llm_provider === 'openai'">
-              <el-form-item label="OpenAI API Key">
-                <el-input v-model="apiForm.openai_api_key" type="password" show-password
-                  :placeholder="maskedKeys.openai || 'sk-...'" style="width:320px;" />
-                <el-link href="https://platform.openai.com/api-keys" target="_blank" style="margin-left:8px;font-size:12px;">取得 Key ↗</el-link>
-              </el-form-item>
-            </template>
-
-            <!-- Gemini -->
-            <template v-if="apiForm.llm_provider === 'gemini'">
-              <el-form-item label="Gemini API Key">
-                <el-input v-model="apiForm.gemini_api_key" type="password" show-password
-                  :placeholder="maskedKeys.gemini || 'AIzaSy...'" style="width:320px;" />
-                <el-link href="https://aistudio.google.com/app/apikey" target="_blank" style="margin-left:8px;font-size:12px;">取得 Key ↗</el-link>
-              </el-form-item>
-            </template>
-
-            <!-- OpenRouter -->
-            <template v-if="apiForm.llm_provider === 'openrouter'">
-              <el-form-item label="OpenRouter API Key">
-                <el-input v-model="apiForm.openrouter_api_key" type="password" show-password
-                  :placeholder="maskedKeys.openrouter || 'sk-or-...'" style="width:320px;" />
-                <el-link href="https://openrouter.ai/keys" target="_blank" style="margin-left:8px;font-size:12px;">申請（有免費模型）↗</el-link>
-              </el-form-item>
-            </template>
-
-            <el-form-item>
-              <el-button type="primary" :loading="apiSaving" @click="saveApiSettings">儲存設定</el-button>
-              <el-button
-                v-if="apiForm.llm_provider !== 'ollama'"
-                :loading="apiTesting"
-                @click="testConnection">
-                測試連線
-              </el-button>
-              <el-tag v-if="testResult === true" type="success" style="margin-left:8px;">✓ 連線成功</el-tag>
-              <el-tag v-if="testResult === false" type="danger" style="margin-left:8px;">✗ 連線失敗</el-tag>
-            </el-form-item>
-          </el-form>
-
-          <el-alert v-if="testError" type="error" :closable="false" :description="testError" style="margin-top:12px;" />
-        </div>
-      </el-tab-pane>
-
-      <!-- RAG 參數 Tab -->
-      <el-tab-pane label="RAG 參數" name="rag">
+          <div class="section-body">
         <div v-loading="ragLoading" style="max-width:520px;">
           <el-alert type="info" :closable="false" style="margin-bottom:20px;">
             調整後立即生效（下一次查詢即使用新參數），無需重啟服務。
@@ -213,16 +137,93 @@
                 active-text="啟用（BGE Re-ranker）"
                 inactive-text="停用（直接取 top_k 筆）" />
             </el-form-item>
+            <el-divider />
+            <el-form-item label="Chunk 大小（字元）">
+              <el-input-number v-model="ragForm.doc_chunk_size" :min="100" :max="2000" :step="100" style="width:150px;" />
+              <span style="margin-left:10px;font-size:12px;color:#999;">文件分塊軟上限，影響新上傳的文件</span>
+            </el-form-item>
             <el-form-item>
               <el-button type="primary" :loading="ragSaving" @click="saveRagSettings">儲存設定</el-button>
               <el-button @click="loadRagSettings">重置</el-button>
             </el-form-item>
           </el-form>
         </div>
-      </el-tab-pane>
+          </div>
+        </div>
+        <div class="settings-section">
+          <div class="section-header">
+            <MessageSquare :size="16" :stroke-width="1.5" class="section-icon" />
+            <span>對話行為</span>
+          </div>
+          <div class="section-body">
+        <div v-loading="chatLoading" style="max-width:580px;">
+          <el-alert type="info" :closable="false" style="margin-bottom:20px;">
+            調整後立即生效（下一次問答即使用新參數）。
+          </el-alert>
+          <el-form :model="chatForm" label-width="180px" label-position="left">
+            <el-form-item label="溫度（Temperature）">
+              <el-slider v-model="chatForm.chat_temperature"
+                :min="0" :max="2" :step="0.1"
+                show-input :input-size="'small'" style="width:320px;" />
+              <div style="font-size:12px;color:#999;margin-top:4px;">
+                0 = 嚴謹精確，0.7 = 平衡（建議），2 = 富有創意
+              </div>
+            </el-form-item>
+            <el-form-item label="回應最大長度 Tokens">
+              <el-input-number v-model="chatForm.chat_max_tokens" :min="256" :max="16384" :step="256" style="width:200px;" />
+              <span style="margin-left:10px;font-size:12px;color:#999;">一般建議 2048</span>
+            </el-form-item>
+            <el-form-item label="對話歷史保留輪數">
+              <el-input-number v-model="chatForm.chat_history_rounds" :min="1" :max="50" :step="1" style="width:150px;" />
+              <span style="margin-left:10px;font-size:12px;color:#999;">每輪 = 1 張 user + 1 張 AI</span>
+            </el-form-item>
+            <el-form-item label="全域 System Prompt">
+              <el-input
+                v-model="chatForm.chat_system_prompt"
+                type="textarea"
+                :rows="5"
+                placeholder="可不填。填寫後會追加在 AI 的開頭指令中，讓 AI 承擔特定角色或風格。"
+                style="width:380px;font-family:monospace;font-size:13px;"
+              />
+            </el-form-item>
 
-      <!-- 備份管理 Tab (第二階段) -->
-      <el-tab-pane v-if="false" label="備份管理" name="backup">
+            <!-- 文件處理模型 -->
+            <el-divider content-position="left">文件處理模型</el-divider>
+            <el-form-item label="文件分析模型">
+              <el-select
+                v-model="chatForm.doc_analysis_model"
+                placeholder="（與對話模型相同）"
+                style="width:280px;"
+                clearable
+              >
+                <el-option
+                  v-for="m in chatModels"
+                  :key="m.id"
+                  :label="m.name"
+                  :value="m.name"
+                />
+              </el-select>
+              <div style="font-size:12px;color:#999;margin-top:4px;">
+                用於文件攝取時的 LLM 分析（實體抽取、KB 建議、Tag 建議）。不填則與對話模型相同。
+              </div>
+            </el-form-item>
+
+            <el-form-item>
+              <el-button type="primary" :loading="chatSaving" @click="saveChatSettings">儲存設定</el-button>
+              <el-button @click="loadChatSettings">重置</el-button>
+            </el-form-item>
+          </el-form>
+        </div>
+          </div>
+        </div>
+      </template>
+      <template v-if="activeGroup === 'data'">
+        <div class="settings-section">
+          <div class="section-header">
+            <HardDrive :size="16" :stroke-width="1.5" class="section-icon" />
+            <span>備份管理</span>
+          </div>
+          <div class="section-body">
         <div style="max-width:720px;">
           <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px;">
             <el-button type="primary" :loading="backupTriggering" @click="triggerBackup">立即備份</el-button>
@@ -242,10 +243,14 @@
             </el-table-column>
           </el-table>
         </div>
-      </el-tab-pane>
-
-      <!-- 知識庫 Schema Tab -->
-      <el-tab-pane label="知識庫 Schema" name="schema">
+          </div>
+        </div>
+        <div class="settings-section">
+          <div class="section-header">
+            <Database :size="16" :stroke-width="1.5" class="section-icon" />
+            <span>知識庫 Schema</span>
+          </div>
+          <div class="section-body">
         <div v-loading="schemaLoading" style="max-width:760px;">
           <el-alert type="info" :closable="false" style="margin-bottom:20px;">
             Schema 會被注入至每次問答的 System Prompt，用來告訴 AI 知識庫的結構與回答準則。若為空則不注入。
@@ -263,10 +268,16 @@
             <span style="font-size:12px;color:#999;align-self:center;">上限 8000 字元</span>
           </div>
         </div>
-      </el-tab-pane>
-
-      <!-- 使用者設定 Tab -->
-      <el-tab-pane label="使用者設定" name="user">
+          </div>
+        </div>
+      </template>
+      <template v-if="activeGroup === 'user'">
+        <div class="settings-section">
+          <div class="section-header">
+            <User :size="16" :stroke-width="1.5" class="section-icon" />
+            <span>使用者設定</span>
+          </div>
+          <div class="section-body">
         <div style="max-width:480px;">
           <!-- 帳號資訊 -->
           <el-card style="margin-bottom:20px;">
@@ -299,22 +310,60 @@
             </el-form>
           </el-card>
         </div>
-      </el-tab-pane>
-    </el-tabs>
+          </div>
+        </div>
+      </template>
+      <template v-if="activeGroup === 'system'">
+        <div class="settings-section">
+          <div class="section-header">
+            <Bot :size="16" :stroke-width="1.5" class="section-icon" />
+            <span>AI Skill</span>
+          </div>
+          <div class="section-body">
+        <div class="skill-grid">
+          <el-card v-for="skill in skills" :key="skill.page_key" class="skill-card">
+            <template #header>
+              <div class="skill-card-header">
+                <div class="skill-card-title">
+                  <component :is="SKILL_ICONS[skill.page_key]" :size="18" :stroke-width="1.5" class="skill-icon" />
+                  <span>{{ skill.name }}</span>
+                </div>
+                <el-switch v-model="skill.is_enabled" active-text="啟用" inactive-text="停用"
+                  :loading="skill._saving" @change="saveSkill(skill)" />
+              </div>
+            </template>
+            <div class="skill-body">
+              <div class="skill-label">自訂指令（選填）：</div>
+              <el-input
+                v-model="skill.user_prompt"
+                type="textarea"
+                :autosize="{ minRows: 3, maxRows: 8 }"
+                :placeholder="`補充說明給「${skill.name}」的額外指令，例如：回答時請用繁體中文，並引用文件章節。`"
+              />
+              <div class="skill-actions">
+                <el-button type="primary" size="small" :loading="skill._saving" @click="saveSkill(skill)">儲存</el-button>
+              </div>
+            </div>
+          </el-card>
+        </div>
+          </div>
+        </div>
+      </template>
+    </div>
 
     <!-- Add / Edit Dialog -->
     <el-dialog v-model="showAddDialog" :title="editingId ? '編輯模型' : '新增模型'" width="600px" @closed="onDialogClosed">
       <el-form :model="modelForm" label-width="110px">
         <el-form-item label="Provider" required>
           <el-select v-model="modelForm.provider" style="width:220px;" @change="onProviderChange">
-            <el-option v-for="p in PROVIDER_DEFS" :key="p.key" :label="p.icon + ' ' + p.name" :value="p.key" />
+            <el-option v-for="p in PROVIDER_DEFS" :key="p.key" :label="p.name" :value="p.key" />
           </el-select>
         </el-form-item>
         <el-form-item label="模型類型">
           <el-select v-model="modelForm.model_type" style="width:220px;">
-            <el-option value="chat"      label="💬 Chat（對話）" />
-            <el-option value="embedding" label="📐 Embedding（嵌入）" />
-            <el-option value="rerank"    label="🔄 Re-rank（重排）" />
+            <el-option value="chat"      label="Chat（對話）" />
+            <el-option value="embedding" label="Embedding（嵌入）" />
+            <el-option value="rerank"    label="Re-rank（重排）" />
           </el-select>
         </el-form-item>
         <el-form-item label="模型名稱" required>
@@ -337,23 +386,26 @@
           <el-switch v-model="modelForm.vision_support" active-text="是" inactive-text="否" />
         </el-form-item>
         <el-form-item label="">
-          <el-button :loading="verifying" @click="verifyModel">🔗 驗證連線</el-button>
+          <el-button :loading="verifying" @click="verifyModel">
+            <Link :size="14" :stroke-width="1.5" style="margin-right:4px;vertical-align:middle" />驗證連線
+          </el-button>
           <el-tag v-if="verifyStatus === 'ok'"   type="success" style="margin-left:8px;">{{ verifyMsg }}</el-tag>
           <el-tag v-if="verifyStatus === 'fail'" type="danger"  style="margin-left:8px;">{{ verifyMsg }}</el-tag>
         </el-form-item>
-        <el-divider>進階資訊（選填）</el-divider>
-        <el-form-item label="Family"><el-input v-model="modelForm.family" /></el-form-item>
-        <el-form-item label="開發者"><el-input v-model="modelForm.developer" /></el-form-item>
-        <el-form-item label="參數(B)"><el-input-number v-model="modelForm.params_b" :precision="1" :step="0.5" /></el-form-item>
-        <el-form-item label="Context 長度"><el-input-number v-model="modelForm.context_length" :step="1024" /></el-form-item>
-        <el-form-item label="License"><el-input v-model="modelForm.license" /></el-form-item>
-        <el-form-item v-if="modelForm.provider === 'ollama'" label="Ollama ID">
-          <el-input v-model="modelForm.ollama_id" />
-        </el-form-item>
-        <el-form-item label="HF ID"><el-input v-model="modelForm.hf_id" /></el-form-item>
-        <el-form-item label="Tags">
-          <el-input v-model="modelForm.tags_str" placeholder="逗號分隔，如: llm,chat,code" />
-        </el-form-item>
+        <div class="advanced-toggle" @click="showAdvanced = !showAdvanced">
+          <span class="advanced-line"></span>
+          <span class="advanced-label">進階資訊（選填）{{ showAdvanced ? ' ▴' : ' ▾' }}</span>
+          <span class="advanced-line"></span>
+        </div>
+        <div v-show="showAdvanced">
+          <el-form-item label="開發者"><el-input v-model="modelForm.developer" /></el-form-item>
+          <el-form-item label="參數(B)"><el-input-number v-model="modelForm.params_b" :precision="1" :step="0.5" /></el-form-item>
+          <el-form-item label="Context 長度"><el-input-number v-model="modelForm.context_length" :step="1024" /></el-form-item>
+          <el-form-item label="License"><el-input v-model="modelForm.license" /></el-form-item>
+          <el-form-item label="Tags">
+            <el-input v-model="modelForm.tags_str" placeholder="逗號分隔，如: llm,chat,code" />
+          </el-form-item>
+        </div>
       </el-form>
       <template #footer>
         <el-button @click="showAddDialog = false">取消</el-button>
@@ -364,13 +416,16 @@
 </template>
 
 <script setup>
-import { ref, onMounted, reactive, defineComponent, computed } from 'vue'
+import { ref, onMounted, onActivated, reactive, defineComponent, computed } from 'vue'
+import { useRoute } from 'vue-router'
 import { Refresh, Check } from '@element-plus/icons-vue'
-import { wikiApi, systemSettingsApi } from '../api/index.js'
+import { Layers, FolderOpen, MessageSquare, Network, Puzzle, Settings, Dna, Cpu, Key, Sliders, HardDrive, Database, Bot, User, Link, BookOpen } from 'lucide-vue-next'
+import { wikiApi, systemSettingsApi, agentSkillsApi } from '../api/index.js'
 import { ElMessage } from 'element-plus'
 import { useAuthStore } from '../stores/auth.js'
 
 const authStore = useAuthStore()
+const route = useRoute()
 const userEmail = computed(() => authStore.userEmail)
 const userRole  = computed(() => authStore.userRole)
 
@@ -399,22 +454,40 @@ function reloadPage() {
   window.location.reload()
 }
 
-// ── Tab 切換 ──────────────────────────────────────────────────────────────────
-const activeTab = ref('list')
-function onTabChange(tab) {
-  if (tab === 'rag') loadRagSettings()  if (tab === 'schema') loadSchema()}
+// ── 群組切換 ──────────────────────────────────────────────────────────────────
+const GROUP_DEFS = [
+  { key: 'user',   label: '使用者設定' },
+  { key: 'model',  label: '模型設定' },
+  { key: 'chat',   label: '對話設定' },
+  { key: 'data',   label: '資料管理' },
+  { key: 'system', label: '系統' },
+]
+const activeGroup = ref('user')
+function onGroupChange(group) {
+  activeGroup.value = group
+  if (group === 'chat')   { loadRagSettings(); loadChatSettings() }
+  if (group === 'data')   { loadSchema(); loadBackupList() }
+  if (group === 'system') { loadSkills() }
+}
+function _applyRouteGroup() {
+  const g = route.query.group
+  if (g && GROUP_DEFS.some(d => d.key === g)) onGroupChange(g)
+}
 
 // ── Model List ────────────────────────────────────────────────────────────────
 const models = ref([])
 const loading = ref(false)
 const searchQ = ref('')
 const PROVIDER_DEFS = [
-  { key: 'ollama',     name: 'Ollama',     icon: '🏠', types: ['chat', 'embedding'] },
-  { key: 'openai',     name: 'OpenAI',     icon: '🤖', types: ['chat', 'embedding'] },
-  { key: 'groq',       name: 'Groq',       icon: '⚡', types: ['chat'] },
-  { key: 'gemini',     name: 'Gemini',     icon: '💎', types: ['chat'] },
-  { key: 'openrouter', name: 'OpenRouter', icon: '🌐', types: ['chat'] },
+  { key: 'ollama',     name: 'Ollama',     logo: 'https://ollama.com/public/ollama.png',                                                                                     types: ['chat', 'embedding'] },
+  { key: 'openai',     name: 'OpenAI',     logo: 'https://upload.wikimedia.org/wikipedia/commons/0/04/ChatGPT_logo.svg',                                                       types: ['chat', 'embedding'] },
+  { key: 'groq',       name: 'Groq',       logo: 'https://groq.com/wp-content/uploads/2024/03/groq-logo.png',                                                                  types: ['chat'] },
+  { key: 'gemini',     name: 'Gemini',     logo: 'https://www.gstatic.com/lamda/images/gemini_sparkle_v002_d4735304ff6292a690345.svg',                                          types: ['chat'] },
+  { key: 'openrouter', name: 'OpenRouter', logo: 'https://openrouter.ai/favicon.ico',                                                                                           types: ['chat'] },
+  { key: 'anthropic',  name: 'Anthropic Claude', logo: 'https://www.anthropic.com/favicon.ico',                                                                                  types: ['chat'] },
 ]
+const failedLogos = ref(new Set())
+function onLogoError(key) { failedLogos.value = new Set([...failedLogos.value, key]) }
 const selectedProvider = ref(null)
 const filteredModels = computed(() => {
   if (!selectedProvider.value) return models.value
@@ -422,6 +495,7 @@ const filteredModels = computed(() => {
 })
 const providerCount = (key) => models.value.filter(m => m.provider === key).length
 const showAddDialog = ref(false)
+const showAdvanced = ref(false)
 const saving = ref(false)
 const editingId = ref(null)
 
@@ -439,7 +513,62 @@ const modelForm = reactive({
   _hasApiKey: false,   // 表示 DB 已有儲存的 API Key
 })
 
-onMounted(loadModels)
+let _settingsMounting = false
+onMounted(async () => {
+  _settingsMounting = true
+  try {
+    await loadModels()
+    await loadApiSettings()
+    loadChatSettings()
+    _applyRouteGroup()
+  } finally {
+    _settingsMounting = false
+  }
+})
+
+// ── AI Skill ──────────────────────────────────────────────────────────────────
+const SKILL_ICONS = {
+  docs:     FolderOpen,
+  chat:     MessageSquare,
+  kb:       BookOpen,
+  ontology: Network,
+  plugins:  Puzzle,
+  settings: Settings,
+  protein:  Dna,
+}
+
+const skills = ref([])
+
+async function loadSkills() {
+  try {
+    const data = await agentSkillsApi.list()
+    skills.value = data.map(s => ({ ...s, _saving: false }))
+  } catch (e) {
+    ElMessage.error('載入 AI Skill 失敗：' + e.message)
+  }
+}
+
+async function saveSkill(skill) {
+  skill._saving = true
+  try {
+    await agentSkillsApi.update(skill.page_key, {
+      user_prompt: skill.user_prompt,
+      is_enabled: skill.is_enabled,
+    })
+    ElMessage.success(`「${skill.name}」已儲存`)
+  } catch (e) {
+    ElMessage.error('儲存失敗：' + e.message)
+  } finally {
+    skill._saving = false
+  }
+}
+
+onActivated(async () => {
+  if (_settingsMounting) return
+  await loadModels()
+  await loadApiSettings()
+  _applyRouteGroup()
+})
 
 async function loadModels() {
   loading.value = true
@@ -498,6 +627,7 @@ function onDialogClosed() {
   editingId.value = null
   verifyStatus.value = ''
   verifyMsg.value = ''
+  showAdvanced.value = false
 }
 
 // ── Verify ──────────────────────────────────────────────────────────────────────────────
@@ -593,6 +723,7 @@ const _DEFAULT_MODELS = {
   openai:     'gpt-4o-mini',
   gemini:     'gemini-2.0-flash',
   openrouter: 'meta-llama/llama-3.3-70b-instruct:free',
+  anthropic:  'claude-sonnet-4-6',
 }
 
 const apiLoading = ref(false)
@@ -601,7 +732,7 @@ const apiTesting = ref(false)
 const testResult = ref(null)   // true | false | null
 const testError  = ref('')
 
-const maskedKeys = reactive({ openai: '', groq: '', gemini: '', openrouter: '' })
+const maskedKeys = reactive({ openai: '', groq: '', gemini: '', openrouter: '', anthropic: '' })
 
 const apiForm = reactive({
   llm_provider:      'ollama',
@@ -610,6 +741,7 @@ const apiForm = reactive({
   groq_api_key:      null,
   gemini_api_key:    null,
   openrouter_api_key: null,
+  anthropic_api_key: null,
 })
 
 const providerDefaultModel = computed(() => _DEFAULT_MODELS[apiForm.llm_provider] || '')
@@ -624,6 +756,7 @@ async function loadApiSettings() {
     maskedKeys.groq         = data.groq_api_key_masked
     maskedKeys.gemini       = data.gemini_api_key_masked
     maskedKeys.openrouter   = data.openrouter_api_key_masked
+    maskedKeys.anthropic    = data.anthropic_api_key_masked
   } catch (e) {
     console.error(e)
   } finally {
@@ -647,6 +780,7 @@ async function saveApiSettings() {
       groq_api_key:      apiForm.groq_api_key,
       gemini_api_key:    apiForm.gemini_api_key,
       openrouter_api_key: apiForm.openrouter_api_key,
+      anthropic_api_key: apiForm.anthropic_api_key,
     })
     ElMessage.success('設定已儲存，對話頁立即生效')
     // 重新載入遮罩
@@ -656,6 +790,7 @@ async function saveApiSettings() {
     apiForm.groq_api_key = null
     apiForm.gemini_api_key = null
     apiForm.openrouter_api_key = null
+    apiForm.anthropic_api_key = null
 
     // ── 自動新增模型到模型清單（非 Ollama 本地模型才新增）────────────────────
     if (savedModelName && savedProvider !== 'ollama') {
@@ -711,6 +846,7 @@ const ragForm = reactive({
   rag_rerank_top_k:      5,
   rag_max_context_chars: 4000,
   rag_rerank_enabled:    true,
+  doc_chunk_size:        400,
 })
 
 async function loadRagSettings() {
@@ -721,6 +857,7 @@ async function loadRagSettings() {
     ragForm.rag_rerank_top_k      = data.rag_rerank_top_k
     ragForm.rag_max_context_chars = data.rag_max_context_chars
     ragForm.rag_rerank_enabled    = data.rag_rerank_enabled
+    ragForm.doc_chunk_size        = data.doc_chunk_size ?? 400
   } catch (e) {
     console.error(e)
   } finally {
@@ -766,6 +903,51 @@ async function saveSchema() {
     ElMessage.error(e.message)
   } finally {
     schemaSaving.value = false
+  }
+}
+
+// ── 對話行為設定 ──────────────────────────────────────────────────────────────
+const chatLoading = ref(false)
+const chatSaving  = ref(false)
+const chatModels  = ref([])
+const chatForm = reactive({
+  chat_temperature:    0.7,
+  chat_max_tokens:     2048,
+  chat_history_rounds: 10,
+  chat_system_prompt:  '',
+  doc_analysis_model:  '',
+})
+
+async function loadChatSettings() {
+  chatLoading.value = true
+  try {
+    const [data, modelsData] = await Promise.all([
+      systemSettingsApi.getChatBehavior(),
+      wikiApi.listModels(),
+    ])
+    chatForm.chat_temperature    = data.chat_temperature
+    chatForm.chat_max_tokens     = data.chat_max_tokens
+    chatForm.chat_history_rounds = data.chat_history_rounds
+    chatForm.chat_system_prompt  = data.chat_system_prompt
+    chatForm.doc_analysis_model  = data.doc_analysis_model || ''
+    chatModels.value = (Array.isArray(modelsData) ? modelsData : (modelsData?.items || []))
+      .filter(m => m.model_type === 'chat' || !m.model_type)
+  } catch (e) {
+    console.error(e)
+  } finally {
+    chatLoading.value = false
+  }
+}
+
+async function saveChatSettings() {
+  chatSaving.value = true
+  try {
+    await systemSettingsApi.saveChatBehavior({ ...chatForm })
+    ElMessage.success('對話設定已儲存，下次問答即生效')
+  } catch (e) {
+    ElMessage.error(e.message)
+  } finally {
+    chatSaving.value = false
   }
 }
 
@@ -847,6 +1029,106 @@ async function changePassword() {
 </script>
 
 <style scoped>
+.settings-root {
+  min-height: 100%;
+  background: #f4f6f9;
+  padding: 24px;
+}
+.settings-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 20px;
+}
+.settings-title { font-size: 20px; margin: 0; font-weight: 600; color: #1e293b; }
+
+/* ── Group Tabs (capsule) ───────────────────────────────── */
+.group-tabs {
+  display: inline-flex;
+  background: #e8edf2;
+  border-radius: 10px;
+  padding: 4px;
+  gap: 2px;
+  margin-bottom: 24px;
+}
+.group-tab {
+  padding: 7px 20px;
+  border-radius: 7px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  color: #64748b;
+  transition: background 0.15s, color 0.15s, box-shadow 0.15s;
+}
+.group-tab:hover { color: #334155; }
+.group-tab.active {
+  background: #fff;
+  color: #1e293b;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.12);
+}
+
+/* ── Settings Body ─────────────────────────────────────── */
+.settings-body {
+  max-width: 860px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* ── Section Card ──────────────────────────────────────── */
+.settings-section {
+  background: #fff;
+  border-radius: 10px;
+  border: 1px solid #e8eaed;
+}
+.section-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 16px 24px;
+  font-size: 16px;
+  font-weight: 600;
+  color: #1e293b;
+  border-bottom: 1px solid #f0f0f0;
+}
+.section-icon { color: #64748b; flex-shrink: 0; }
+.section-body { padding: 24px; }
+
+.model-group-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--el-text-color-secondary);
+  margin: 16px 0 8px;
+}
+.model-group-title:first-of-type {
+  margin-top: 0;
+}
+
+.advanced-toggle {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  cursor: pointer;
+  margin: 16px 0;
+  user-select: none;
+}
+.advanced-toggle .advanced-line {
+  flex: 1;
+  height: 1px;
+  background: var(--el-border-color-lighter);
+}
+.advanced-toggle .advanced-label {
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
+  white-space: nowrap;
+}
+.advanced-toggle:hover .advanced-label {
+  color: var(--el-color-primary);
+}
+
+/* ── Provider Cards ─────────────────────────────────────── */
 .provider-grid {
   display: flex;
   flex-wrap: wrap;
@@ -871,8 +1153,51 @@ async function changePassword() {
   border-color: var(--el-color-primary);
   background: var(--el-color-primary-light-9);
 }
-.pcard-icon { font-size: 26px; line-height: 1; margin-bottom: 6px; }
+.pcard-icon { width: 40px; height: 40px; margin: 0 auto 8px; display: flex; align-items: center; justify-content: center; }
+.provider-logo { width: 40px; height: 40px; object-fit: contain; border-radius: 8px; }
+.provider-logo-fallback {
+  width: 40px; height: 40px;
+  border-radius: 8px;
+  background: #e2e8f0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 18px; font-weight: 700; color: #475569;
+}
 .pcard-name { font-size: 14px; font-weight: 600; margin-bottom: 6px; }
 .pcard-types { min-height: 24px; margin-bottom: 4px; }
 .pcard-count { font-size: 12px; color: var(--el-text-color-secondary); margin-bottom: 4px; }
+
+/* ── LLM Provider 下拉選項 logo ────────────────────────────── */
+.llm-provider-opt { display: flex; align-items: center; gap: 6px; }
+.llm-opt-logo { width: 16px; height: 16px; object-fit: contain; flex-shrink: 0; }
+.llm-opt-logo-fallback {
+  width: 16px; height: 16px; font-size: 10px; font-weight: 700;
+  color: #fff; background: #d97706; border-radius: 3px;
+  display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
+}
+
+/* ── AI Skill ────────────────────────────────────────────── */
+.skill-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  gap: 16px;
+  margin-top: 4px;
+}
+.skill-card { }
+.skill-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.skill-card-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  font-size: 14px;
+}
+.skill-icon { color: #64748b; flex-shrink: 0; }
+.skill-body { display: flex; flex-direction: column; gap: 8px; }
+.skill-label { font-size: 12px; color: #64748b; }
+.skill-actions { display: flex; justify-content: flex-end; margin-top: 4px; }
 </style>
+

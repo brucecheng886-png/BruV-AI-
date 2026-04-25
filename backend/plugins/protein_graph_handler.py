@@ -169,6 +169,9 @@ async def _get_networks(db) -> list[str]:
 
 async def _get_graph_data(network: str, min_score: float, db) -> dict:
     from sqlalchemy import text
+    import os
+
+    max_edges = int(os.getenv("MAX_EDGES", 2000))
 
     # 取邊
     result = await db.execute(
@@ -177,21 +180,22 @@ async def _get_graph_data(network: str, min_score: float, db) -> dict:
             FROM protein_interactions
             WHERE network = :network AND score >= :min_score
             ORDER BY score DESC
-            LIMIT 500
+            LIMIT :max_edges
         """),
-        {"network": network, "min_score": min_score},
+        {"network": network, "min_score": min_score, "max_edges": max_edges},
     )
     edges_raw = result.fetchall()
 
-    # 蒐集節點
+    # 蒐集節點，計算 val（連結度）與 weighted_degree（加權度）
     node_set: dict[str, dict] = {}
     edges = []
     for a, b, score in edges_raw:
         for sym in [a, b]:
             if sym not in node_set:
-                node_set[sym] = {"id": sym, "name": sym, "val": 1}
+                node_set[sym] = {"id": sym, "name": sym, "val": 1, "weighted_degree": 0.0}
             else:
                 node_set[sym]["val"] += 1
+            node_set[sym]["weighted_degree"] = round(node_set[sym]["weighted_degree"] + score, 4)
         edges.append({"source": a, "target": b, "value": score})
 
     # 查詢 genecards_url

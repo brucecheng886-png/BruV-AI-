@@ -262,3 +262,62 @@ async def get_plugin_catalog(_user: CurrentUser):
     from plugins.registry import PLUGIN_CATALOG
     return PLUGIN_CATALOG
 
+
+# ── Notion 同步端點（Phase C）────────────────────────────────────
+
+class NotionSyncRequest(BaseModel):
+    plugin_id: str
+    database_id: str | None = None
+
+
+@router.post("/notion/sync", status_code=status.HTTP_202_ACCEPTED)
+async def notion_sync(
+    body: NotionSyncRequest,
+    _user: CurrentUser,
+    db: AsyncSession = Depends(get_db),
+):
+    """觸發 Notion 資料庫增量同步（202 Accepted）"""
+    result = await db.execute(select(Plugin).where(Plugin.id == body.plugin_id))
+    plugin = result.scalar_one_or_none()
+    if not plugin:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Plugin 不存在")
+    if not plugin.enabled:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Plugin 已停用")
+
+    # database_id 優先使用 request body，否則從 plugin_config 取
+    database_id = body.database_id
+    if not database_id:
+        config      = getattr(plugin, "plugin_config", {}) or {}
+        database_id = config.get("database_id", "")
+    if not database_id:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="缺少 database_id，請在 request body 或 plugin_config 中提供",
+        )
+
+    from tasks.notion_tasks import sync_notion_database_task
+    task = sync_notion_database_task.delay(database_id, body.plugin_id)
+
+    logger.info("Notion sync task queued: task_id=%s plugin_id=%s database_id=%s",
+                task.id, body.plugin_id, database_id)
+    return {"task_id": task.id, "status": "queued", "database_id": database_id}
+
+
+@router.get("/notion/sync/{task_id}")
+async def notion_sync_status(task_id: str, _user: CurrentUser):
+    """查詢 Notion 同步任務狀態"""
+    from celery.result import AsyncResult
+    from tasks.notion_tasks import sync_notion_database_task  # 確保 task 已註冊
+
+    result = AsyncResult(task_id)
+    state  = result.state
+
+    if state == "SUCCESS":
+        return {"task_id": task_id, "status": "completed", "result": result.result}
+    elif state == "FAILURE":
+        return {"task_id": task_id, "status": "failed", "error": str(result.result)}
+    elif state == "PENDING":
+        return {"task_id": task_id, "status": "pending"}
+    else:
+        return {"task_id": task_id, "status": state.lower()}
+

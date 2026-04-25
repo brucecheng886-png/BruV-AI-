@@ -66,6 +66,9 @@ class Settings(BaseSettings):
     CELERY_BROKER_URL: str = "redis://redis:6379/1"
     CELERY_RESULT_BACKEND: str = "redis://redis:6379/2"
 
+    # KB 相似度分類
+    KB_SIMILARITY_THRESHOLD: float = 0.75
+
     # 應用程式
     DEBUG: bool = False
     CORS_ORIGINS: List[str] = ["http://localhost:3000"]
