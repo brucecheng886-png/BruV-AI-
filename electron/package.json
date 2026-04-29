@@ -32,6 +32,59 @@
       {
         "from": "../.env.example",
         "to": ".env.example"
+      },
+      {
+        "from": "../backend",
+        "to": "backend",
+        "filter": [
+          "**/*",
+          "!**/__pycache__/**",
+          "!**/*.pyc",
+          "!**/.pytest_cache/**",
+          "!**/node_modules/**"
+        ]
+      },
+      {
+        "from": "../frontend",
+        "to": "frontend",
+        "filter": [
+          "**/*",
+          "!node_modules/**",
+          "!dist/**",
+          "!**/*.log",
+          "!build_log.txt",
+          "!build_output.txt",
+          "!docker_build.txt"
+        ]
+      },
+      {
+        "from": "../playwright-service",
+        "to": "playwright-service",
+        "filter": [
+          "**/*",
+          "!**/__pycache__/**",
+          "!**/*.pyc",
+          "!**/node_modules/**"
+        ]
+      },
+      {
+        "from": "../scripts",
+        "to": "scripts",
+        "filter": [
+          "init_db.sql"
+        ]
+      },
+      {
+        "from": "../nginx",
+        "to": "nginx"
+      },
+      {
+        "from": "../monitoring",
+        "to": "monitoring"
+      },
+      {
+        "from": "../searxng",
+        "to": "searxng"
       }
     ],
     "win": {
@@ -49,7 +102,15 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "BruV AI"
-    }
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "brucecheng886-png",
+        "repo": "BruV-AI-",
+        "releaseType": "release"
+      }
+    ]
   },
   "devDependencies": {
     "electron": "^30.5.1",
@@ -57,5 +118,8 @@
     "png-to-ico": "^3.0.1",
     "sharp": "^0.34.5",
     "svg2ico": "^1.0.35"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.3"
   }
 }

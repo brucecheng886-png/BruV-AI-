@@ -5,6 +5,10 @@ const http = require('http')
 const fs = require('fs')
 const crypto = require('crypto')
 const { exec, spawn } = require('child_process')
+const { autoUpdater } = require('electron-updater')
+
+autoUpdater.autoDownload = true
+autoUpdater.autoInstallOnAppQuit = true
 
 const TARGET_URL = 'http://localhost:80'
 const BACKEND_HEALTH_URL = 'http://localhost:80/api/health'
@@ -23,7 +27,11 @@ const resourcePath = app.isPackaged
   ? process.resourcesPath
   : path.join(__dirname, '..')
 const composePath = path.join(resourcePath, 'docker-compose.yml')
-const envPath = path.join(resourcePath, '.env')
+// .env 放在 userData（%APPDATA%\BruV AI\.env），確保 installer 升級時不會被覆蓋
+// 開發模式下沿用專案根目錄的 .env，方便調試
+const envPath = app.isPackaged
+  ? path.join(app.getPath('userData'), '.env')
+  : path.join(resourcePath, '.env')
 const envExamplePath = path.join(resourcePath, '.env.example')
 
 // ── 確認 .env 存在；若否，從 .env.example 複製一份 ────────────────────────
@@ -86,8 +94,13 @@ function randomizeEnvPlaceholders (filePath) {
 }
 
 function ensureEnvFile () {
+  let freshlyCreated = false
   try {
+    // 確保 envPath 的目錄存在（userData 在打包模式下可能還沒建）
+    const envDir = path.dirname(envPath)
+    if (!fs.existsSync(envDir)) fs.mkdirSync(envDir, { recursive: true })
     if (!fs.existsSync(envPath)) {
+      freshlyCreated = true
       if (fs.existsSync(envExamplePath)) {
         fs.copyFileSync(envExamplePath, envPath)
       } else {
@@ -100,6 +113,72 @@ function ensureEnvFile () {
   } catch (err) {
     console.error('[ensureEnvFile] 失敗：', err)
   }
+  return { freshlyCreated }
+}
+
+// ── .env 全新建立時，必須清除舊有 stateful volume，避免密碼不符 ───────────
+// PostgreSQL/Redis 等 volume 會保留首次初始化的密碼，若 .env 重建為新密碼
+// 但 volume 仍是舊密碼，backend 會認證失敗 (InvalidPasswordError)。
+// 用 compose down -v 只清本專案的 volume，不會誤傷其他 compose 專案。
+function purgeStatefulVolumes () {
+  return new Promise((resolve) => {
+    const cmd = `docker compose -f "${composePath}" --env-file "${envPath}" down -v --remove-orphans`
+    exec(cmd, { timeout: 120000 }, () => resolve())
+  })
+}
+
+// ── 確認 docker-compose 所需的資料目錄與檔案 bind-mount 來源存在 ──────────
+// 若 ./data/saga.db 不存在，Docker 會自動建立為「資料夾」，導致 SQLite 失敗。
+// 必須在 docker compose up 之前預建為「空檔案」。
+function ensureDataDirs () {
+  try {
+    const dataDir   = path.join(resourcePath, 'data')
+    const subDirs   = ['uploads', 'screenshots']
+    const fileMounts = ['saga.db']
+    if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true })
+    for (const d of subDirs) {
+      const p = path.join(dataDir, d)
+      if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true })
+    }
+    for (const f of fileMounts) {
+      const p = path.join(dataDir, f)
+      if (!fs.existsSync(p)) fs.writeFileSync(p, '', 'utf8')
+      else if (fs.statSync(p).isDirectory()) {
+        // Docker 已誤建為資料夾，移除並重建為空檔
+        fs.rmSync(p, { recursive: true, force: true })
+        fs.writeFileSync(p, '', 'utf8')
+      }
+    }
+  } catch (err) {
+    console.error('[ensureDataDirs] 失敗：', err)
+  }
+}
+
+// ── 偵測 NVIDIA GPU；無 GPU 時產生 compose override 移除 ollama GPU 依賴 ──
+const composeOverridePath = path.join(resourcePath, 'docker-compose.override.yml')
+async function ensureGpuOverride () {
+  let hasGpu = false
+  try {
+    await runCommand('nvidia-smi -L', 5000)
+    hasGpu = true
+  } catch { hasGpu = false }
+  if (hasGpu) {
+    if (fs.existsSync(composeOverridePath)) {
+      try { fs.unlinkSync(composeOverridePath) } catch {}
+    }
+    return
+  }
+  // 沒有 GPU：寫入 override 取消 ollama 的 nvidia 限制
+  const overrideYaml = [
+    'services:',
+    '  ollama:',
+    '    deploy:',
+    '      resources:',
+    '        reservations: {}',
+    ''
+  ].join('\n')
+  try { fs.writeFileSync(composeOverridePath, overrideYaml, 'utf8') }
+  catch (err) { console.error('[ensureGpuOverride] 失敗：', err) }
 }
 
 // ── Helper：Promise 包裝 exec ─────────────────────────────────────────────
@@ -221,14 +300,28 @@ async function ensureDockerRunning () {
 async function startDockerServices () {
   updateLoadingStatus('正在啟動容器服務...')
   ensureEnvFile()
+  ensureDataDirs()
+  await ensureGpuOverride()
+  const upCmd = `docker compose -f "${composePath}" --env-file "${envPath}" up -d --remove-orphans`
+  const downCmd = `docker compose -f "${composePath}" --env-file "${envPath}" down --remove-orphans`
+  const runUp = () => new Promise((resolve, reject) => {
+    exec(upCmd, { timeout: 1800000, maxBuffer: 64 * 1024 * 1024 },
+      (err, _stdout, stderr) => {
+        if (err) { err.stderr = stderr || ''; reject(err) } else resolve()
+      })
+  })
   try {
-    await new Promise((resolve, reject) => {
-      exec(
-        `docker compose -f "${composePath}" --env-file "${envPath}" up -d`,
-        { timeout: 120000 },
-        (err) => { if (err) reject(err); else resolve() }
-      )
-    })
+    try {
+      await runUp()
+    } catch (err) {
+      const msg = (err.stderr || err.message || '').toString()
+      if (/is already in use by container|Conflict\.|name .* is already in use/i.test(msg)) {
+        await new Promise((resolve) => exec(downCmd, { timeout: 120000 }, () => resolve()))
+        await runUp()
+      } else {
+        throw err
+      }
+    }
     return true
   } catch (err) {
     if (splashWindow && !splashWindow.isDestroyed()) splashWindow.hide()
@@ -254,7 +347,7 @@ function createMain () {
     show: false,
     title: 'BruV AI 知識庫',
     titleBarStyle: 'hidden',
-    titleBarOverlay: { color: '#f0f0f0', symbolColor: '#333', height: 38 },
+    titleBarOverlay: { color: '#0f0f1a', symbolColor: '#e5e7eb', height: 38 },
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false,
@@ -312,6 +405,14 @@ function setupIPC () {
   ipcMain.on('win-minimize',     () => mainWindow?.minimize())
   ipcMain.on('win-maximize',     () => mainWindow?.isMaximized() ? mainWindow.unmaximize() : mainWindow.maximize())
   ipcMain.on('win-quit',         () => app.quit())
+  ipcMain.on('win-set-theme', (_, theme) => {
+    if (!mainWindow || typeof mainWindow.setTitleBarOverlay !== 'function') return
+    if (theme === 'dark') {
+      mainWindow.setTitleBarOverlay({ color: '#0f0f1a', symbolColor: '#e5e7eb', height: 38 })
+    } else {
+      mainWindow.setTitleBarOverlay({ color: '#ffffff', symbolColor: '#333333', height: 38 })
+    }
+  })
 
   // ── Token 持久化（safeStorage）──
   const tokenFilePath = () => path.join(app.getPath('userData'), 'token.enc')
@@ -628,6 +729,21 @@ function setupSetupIPC (setupCompleteFile) {
     }
   })
 
+  // ── Step 4: 列出已安裝的 Ollama 模型（供 wizard 判斷是否跳過 pull）──
+  ipcMain.handle('setup:listOllamaModels', async () => {
+    try {
+      const out = await runCommand('ollama list', 8000)
+      // 輸出格式：NAME  ID  SIZE  MODIFIED
+      const lines = out.split(/\r?\n/).slice(1)
+      const models = lines
+        .map(l => l.trim().split(/\s+/)[0])
+        .filter(name => name && name !== 'NAME')
+      return { success: true, models }
+    } catch (err) {
+      return { success: false, models: [], error: String(err?.message ?? err) }
+    }
+  })
+
   // ── Step 4: 下載 Ollama 模型（流式進度） ──
   ipcMain.handle('setup:pullOllamaModel', (event, modelName) => {
     return new Promise((resolve) => {
@@ -687,18 +803,48 @@ function setupSetupIPC (setupCompleteFile) {
 
   // ── Step 6: 啟動容器服務 ──
   ipcMain.handle('setup:startServices', async () => {
-    ensureEnvFile()
+    const { freshlyCreated } = ensureEnvFile()
+    ensureDataDirs()
+    await ensureGpuOverride()
+
+    const upCmd = `docker compose -f "${composePath}" --env-file "${envPath}" up -d --remove-orphans`
+    const downCmd = `docker compose -f "${composePath}" --env-file "${envPath}" down --remove-orphans`
+    const rmConflictCmd = 'docker ps -aq --filter "name=^bruv_ai_" | ForEach-Object { docker rm -f $_ }'
+
+    // 首次/重試都先強制清除殘留同名容器（任何 ai_kb_* 都刪除）
+    await new Promise((resolve) => {
+      exec(downCmd, { timeout: 120000 }, () => resolve())
+    })
+    // 保險上：連同非 compose 產生的 ai_kb_* 也刪掉
+    await new Promise((resolve) => {
+      exec(`powershell -NoProfile -Command "${rmConflictCmd}"`, { timeout: 60000 }, () => resolve())
+    })
+    // .env 是這次安裝才生成 → 舊 volume 內的密碼會與新 .env 不符，必須清掉
+    // ⚠️ 已關閉：.env 現改儲存在 userData，重裝不會遺失，不再需要自動清 volume。
+    // if (freshlyCreated) {
+    //   await purgeStatefulVolumes()
+    // }
+
+    const runUp = () => new Promise((resolve, reject) => {
+      // 首次安裝需 build 3 個 image，設 30 分鐘 timeout
+      exec(upCmd, { timeout: 1800000, maxBuffer: 64 * 1024 * 1024 },
+        (err, _stdout, stderr) => {
+          if (err) {
+            const msg = (stderr || err.message || '').toString()
+            const tail = msg.split(/\r?\n/).slice(-6).join(' | ')
+            const e = new Error(tail.slice(0, 500))
+            e.fullMessage = msg
+            reject(e)
+          } else resolve()
+        }
+      )
+    })
+
     try {
-      await new Promise((resolve, reject) => {
-        exec(
-          `docker compose -f "${composePath}" --env-file "${envPath}" up -d`,
-          { timeout: 120000 },
-          (err) => { if (err) reject(err); else resolve() }
-        )
-      })
+      await runUp()
       return { success: true }
     } catch (err) {
-      return { success: false, error: String(err?.message ?? err).slice(0, 300) }
+      return { success: false, error: String(err?.message ?? err).slice(0, 500) }
     }
   })
 
@@ -825,6 +971,11 @@ app.whenReady().then(() => {
       }
     }
   })
+
+  // ── 自動更新（僅在已安裝版生效）──
+  if (app.isPackaged) {
+    setupAutoUpdater()
+  }
 })
 
 app.on('window-all-closed', async () => {
@@ -839,10 +990,47 @@ app.on('window-all-closed', async () => {
     detail: '停止服務將關閉所有 Docker 容器，下次啟動需要重新等待服務啟動。'
   })
   if (response === 0) {
-    exec(`docker compose -f "${composePath}" --env-file "${envPath}" down`)
+    // 只 stop 不刪除容器與 volume
+    exec(`docker compose -f "${composePath}" --env-file "${envPath}" stop`)
   }
   app.quit()
 })
+
+// ── 自動更新（electron-updater + GitHub Releases）─────────────────────────
+function setupAutoUpdater () {
+  autoUpdater.on('update-available', (info) => {
+    console.log('[autoUpdater] 偵測到新版本：', info.version)
+  })
+  autoUpdater.on('update-not-available', () => {
+    console.log('[autoUpdater] 已是最新版本')
+  })
+  autoUpdater.on('error', (err) => {
+    console.error('[autoUpdater] 錯誤：', err?.message || err)
+  })
+  autoUpdater.on('download-progress', (p) => {
+    console.log(`[autoUpdater] 下載中 ${Math.round(p.percent)}%`)
+  })
+  autoUpdater.on('update-downloaded', async (info) => {
+    const { response } = await dialog.showMessageBox({
+      type: 'info',
+      title: 'BruV AI 更新',
+      message: `已下載新版本 v${info.version}`,
+      detail: '是否立即重新啟動以套用更新？\n（選「稍後」則於下次啟動時自動套用）',
+      buttons: ['立即重啟', '稍後'],
+      defaultId: 0
+    })
+    if (response === 0) autoUpdater.quitAndInstall()
+  })
+
+  // 啟動 5 秒後檢查一次
+  setTimeout(() => {
+    autoUpdater.checkForUpdates().catch(() => {})
+  }, 5000)
+  // 之後每 4 小時檢查一次
+  setInterval(() => {
+    autoUpdater.checkForUpdates().catch(() => {})
+  }, 4 * 60 * 60 * 1000)
+}
 
 // 禁止導航到非 localhost 頁面（安全防護）
 app.on('web-contents-created', (_, contents) => {

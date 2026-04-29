@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld('electronApp', {
   minimize:     () => ipcRenderer.send('win-minimize'),
   maximize:     () => ipcRenderer.send('win-maximize'),
   quit:         () => ipcRenderer.send('win-quit'),
+  setTheme:     (theme) => ipcRenderer.send('win-set-theme', theme),
 })
 
 // Token 持久化（safeStorage）

@@ -1,4 +1,4 @@
-# ================================================================
+﻿# ================================================================
 # 地端 AI 知識庫 — 重啟恢復測試腳本
 # 用途：驗證全容器重啟後所有功能正常、無資料遺失
 # 使用方式：.\scripts\test_recovery.ps1
@@ -62,7 +62,7 @@ Check "Backend /api/health 回 healthy" {
 }
 
 Check "PostgreSQL 可連線" {
-    $result = docker exec ai_kb_postgres psql -U ai_kb_user -d ai_kb -c "SELECT 1;" 2>&1
+    $result = docker exec bruv_ai_postgres psql -U ai_kb_user -d ai_kb -c "SELECT 1;" 2>&1
     if ($result -notmatch "1 row") { throw "PG 連線失敗" }
 }
 
@@ -77,7 +77,7 @@ Check "Neo4j HTTP 可存取" {
 }
 
 Check "Redis PING" {
-    $result = docker exec ai_kb_redis redis-cli ping
+    $result = docker exec bruv_ai_redis redis-cli ping
     if ($result.Trim() -ne "PONG") { throw "Redis PING failed" }
 }
 
@@ -109,7 +109,7 @@ Write-Host ""
 Write-Host "[4/4] 資料持久化驗證..." -ForegroundColor Yellow
 
 Check "PostgreSQL documents 表有資料（非空）" {
-    $result = docker exec ai_kb_postgres psql -U ai_kb_user -d ai_kb `
+    $result = docker exec bruv_ai_postgres psql -U ai_kb_user -d ai_kb `
               -c "SELECT COUNT(*) FROM documents;" -t 2>&1
     $count = [int]($result.Trim())
     Write-Host "      文件數: $count"

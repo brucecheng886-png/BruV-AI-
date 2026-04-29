@@ -15,9 +15,9 @@ echo [1/2] 關閉 Electron 視窗...
 taskkill /F /IM electron.exe >nul 2>&1
 echo       完成。
 
-:: 停止 Docker 後端
-echo [2/2] 停止後端服務 (Docker Compose)...
-docker compose down
+:: 停止 Docker 後端（保留容器與 volume）
+echo [2/2] 停止後端服務 (Docker Compose stop，不刪除容器)...
+docker compose stop
 if %errorlevel% neq 0 (
     echo [錯誤] Docker Compose 停止失敗。
     pause

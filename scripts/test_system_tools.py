@@ -1,6 +1,6 @@
-"""
+﻿"""
 system_tools 完整測試腳本
-執行：docker exec ai_kb_backend python /app/scripts/test_system_tools.py
+執行：docker exec bruv_ai_backend python /app/scripts/test_system_tools.py
 """
 import sys
 sys.path.insert(0, '/app')

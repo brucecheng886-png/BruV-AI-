@@ -285,6 +285,7 @@
     .field-input.invalid { border-color: var(--error); }
     .field-hint { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
     .field-error { font-size: 11px; color: var(--error); margin-top: 4px; display: none; }
+    .field-success { font-size: 11px; color: #22c55e; margin-top: 4px; display: none; }
 
     /* ── Toggle ──────────────────────────────────────────────── */
     .toggle-row {
@@ -572,18 +573,29 @@
   <div style="width:100%">
     <div class="field-group">
       <label class="field-label" for="admin-email">管理員帳號</label>
-      <input type="email" class="field-input" id="admin-email"
-        value="admin@bruvai.local" placeholder="admin@bruvai.local">
-      <div class="field-hint">用於登入 BruV AI 管理介面</div>
+      <input type="text" class="field-input" id="admin-email"
+        value="admin@local" placeholder="admin@local"
+        autocomplete="username">
+      <div class="field-hint">用於登入 BruV AI 管理介面（可使用 admin@local 等本機格式）</div>
       <div class="field-error" id="email-error">請輸入有效的電子郵件地址</div>
     </div>
 
     <div class="field-group">
       <label class="field-label" for="admin-password">管理員密碼</label>
       <input type="password" class="field-input" id="admin-password"
-        placeholder="至少 8 個字元">
+        placeholder="至少 8 個字元"
+        oninput="checkPasswordMatch()">
       <div class="field-hint">至少 8 個字元，請記住此密碼</div>
       <div class="field-error" id="password-error">密碼至少需要 8 個字元</div>
+    </div>
+
+    <div class="field-group">
+      <label class="field-label" for="admin-password-confirm">確認密碼</label>
+      <input type="password" class="field-input" id="admin-password-confirm"
+        placeholder="再次輸入密碼"
+        oninput="checkPasswordMatch()">
+      <div class="field-error" id="password-confirm-error">兩次輸入的密碼不一致</div>
+      <div class="field-success" id="password-confirm-ok">✓ 密碼一致</div>
     </div>
 
     <div class="toggle-row">
@@ -673,6 +685,9 @@
     'qwen2.5:14b': { status: 'pending', percent: 0 },
     'bge-m3':      { status: 'pending', percent: 0 }
   }
+
+  // Step 5 暫存的管理員帳密，Step 6 後端就緒後傳給 init-admin
+  const adminCreds = { email: '', password: '' }
 
   // ── Step Navigation ───────────────────────────────────────
   function showStep (n) {
@@ -816,6 +831,33 @@
         label.textContent = 'Ollama 已安裝'
         sub.textContent   = result.version || ''
         document.getElementById('model-section').style.display = 'block'
+        // 主動偵測已下載的模型，已存在就標記為 done
+        try {
+          const list = await window.setupBridge.listOllamaModels()
+          if (list && list.success && Array.isArray(list.models)) {
+            const has = (target) => list.models.some(m => m === target || m.startsWith(target + ':') || target.startsWith(m + ':') || m.split(':')[0] === target.split(':')[0])
+            for (const name of ['qwen2.5:14b', 'bge-m3']) {
+              if (has(name)) {
+                modelState[name].status  = 'done'
+                modelState[name].percent = 100
+                const id = modelId(name)
+                setModelTag(name, 'done')
+                const fill = document.getElementById(`progress-fill-${id}`)
+                const pct  = document.getElementById(`progress-pct-${id}`)
+                const wrap = document.getElementById(`progress-wrap-${id}`)
+                const text = document.getElementById(`progress-text-${id}`)
+                if (fill) fill.style.width = '100%'
+                if (pct)  pct.textContent  = '100%'
+                if (wrap) wrap.style.display = 'block'
+                if (text) text.textContent = '已安裝（自動偵測）'
+                const btnDl   = document.getElementById(`btn-dl-${id}`)
+                const btnSkip = document.getElementById(`btn-skip-${id}`)
+                if (btnDl)   btnDl.disabled   = true
+                if (btnSkip) btnSkip.disabled = true
+              }
+            }
+          }
+        } catch { /* 忽略偵測失敗，使用者仍可手動下載 */ }
         refreshModelNext()
       } else {
         setIcon(icon, 'error')
@@ -924,6 +966,29 @@
   // ── Step 5: Env Settings ──────────────────────────────────
   function toggleCloudAI (checked) {
     document.getElementById('api-section').classList.toggle('visible', checked)
+  }
+
+  // 即時檢查密碼一致性
+  function checkPasswordMatch () {
+    const pw  = document.getElementById('admin-password').value
+    const cfm = document.getElementById('admin-password-confirm').value
+    const okEl  = document.getElementById('password-confirm-ok')
+    const errEl = document.getElementById('password-confirm-error')
+    const cfmInput = document.getElementById('admin-password-confirm')
+    if (!cfm) {
+      okEl.style.display = 'none'
+      errEl.style.display = 'none'
+      cfmInput.classList.remove('invalid')
+      return
+    }
+    if (pw === cfm) {
+      okEl.style.display = 'block'
+      errEl.style.display = 'none'
+      cfmInput.classList.remove('invalid')
+    } else {
+      okEl.style.display = 'none'
+      errEl.style.display = 'block'
+    }
   }
 
   async function submitEnvSettings () {

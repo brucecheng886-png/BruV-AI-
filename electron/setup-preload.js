@@ -15,6 +15,9 @@ contextBridge.exposeInMainWorld('setupBridge', {
   // Step 4: Ollama 安裝檢測
   checkOllama: () => ipcRenderer.invoke('setup:checkOllama'),
 
+  // Step 4: 列出已安裝模型（用於 wizard 自動跳過）
+  listOllamaModels: () => ipcRenderer.invoke('setup:listOllamaModels'),
+
   // Step 4: 下載 Ollama 模型（流式進度）
   pullOllamaModel: (modelName) =>
     ipcRenderer.invoke('setup:pullOllamaModel', modelName),

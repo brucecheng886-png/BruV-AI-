@@ -1,14 +1,14 @@
-"""
+﻿"""
 migrate_qdrant_kb_id.py — 補寫舊 Qdrant points 的 kb_id payload
 
 路徑：PG chunks.vector_id → chunks.doc_id → documents.knowledge_base_id
      → Qdrant set_payload(kb_id=...)
 
 執行方式（在容器內）：
-  docker exec ai_kb_backend python scripts/migrate_qdrant_kb_id.py
+  docker exec bruv_ai_backend python scripts/migrate_qdrant_kb_id.py
 
 乾跑（只顯示統計，不寫入）：
-  docker exec ai_kb_backend python scripts/migrate_qdrant_kb_id.py --dry-run
+  docker exec bruv_ai_backend python scripts/migrate_qdrant_kb_id.py --dry-run
 """
 import logging
 import sys

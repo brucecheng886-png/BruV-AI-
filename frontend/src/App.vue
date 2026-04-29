@@ -37,10 +37,19 @@ const showAgentPanel = computed(() => route.path !== '/chat' && route.path !== '
 // 切成對話頁面時自動關閉面板
 watch(showAgentPanel, (val) => { if (!val) agentPanelOpen.value = false })
 
+function applyTitleBarTheme (token) {
+  if (window.electronApp?.setTheme) {
+    window.electronApp.setTheme(token ? 'light' : 'dark')
+  }
+}
+
+watch(() => authStore.token, applyTitleBarTheme)
+
 onMounted(() => {
   if (window.electronApp?.version) {
     document.documentElement.classList.add('electron-app')
   }
+  applyTitleBarTheme(authStore.token)
 })
 </script>
 

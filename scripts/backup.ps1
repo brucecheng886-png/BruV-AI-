@@ -1,4 +1,4 @@
-# ================================================================
+﻿# ================================================================
 # 地端 AI 知識庫 — 備份腳本
 # 用途：定期備份 PostgreSQL、Qdrant snapshot、Neo4j 至本機目錄
 #       備份完後上傳至 MinIO
@@ -23,7 +23,7 @@ New-Item -ItemType Directory -Path $BackupDir -Force | Out-Null
 Write-Host "[1/4] PostgreSQL 備份..." -ForegroundColor Yellow
 $PgFile = Join-Path $BackupDir "postgres_$Timestamp.sql.gz"
 try {
-    docker exec ai_kb_postgres sh -c `
+    docker exec bruv_ai_postgres sh -c `
         "pg_dump -U `$POSTGRES_USER `$POSTGRES_DB | gzip" | `
         Set-Content -AsByteStream $PgFile
     Write-Host "      ✅ PG 備份完成: $PgFile"
@@ -58,7 +58,7 @@ Write-Host "[3/4] Neo4j 資料庫備份..." -ForegroundColor Yellow
 $Neo4jFile = Join-Path $BackupDir "neo4j_$Timestamp.dump"
 try {
     # Neo4j CE 使用 neo4j-admin database dump（需先停止資料庫或使用 online backup）
-    docker exec ai_kb_neo4j neo4j-admin database dump neo4j --to-stdout 2>$null | `
+    docker exec bruv_ai_neo4j neo4j-admin database dump neo4j --to-stdout 2>$null | `
         Set-Content -AsByteStream $Neo4jFile
     Write-Host "      ✅ Neo4j 備份完成: $Neo4jFile"
 } catch {
@@ -70,7 +70,7 @@ Write-Host "[4/4] 上傳備份至 MinIO..." -ForegroundColor Yellow
 try {
     # 使用 MinIO mc 客戶端（docker run）上傳整個備份目錄
     $localPath = $BackupDir -replace "\\", "/"
-    docker run --rm --network ai_kb_network `
+    docker run --rm --network bruv_ai_network `
         -v "${BackupDir}:/backup" `
         minio/mc:latest sh -c `
         "mc alias set myminio http://minio:9000 minioadmin minioadmin 2>/dev/null; mc cp -r /backup myminio/ai-kb-backups/$Timestamp/"

@@ -13,7 +13,7 @@ from models import User
 
 router = APIRouter()
 
-EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+(\.[^\s@]+)?$")
 
 
 # ── 登入 ──────────────────────────────────────────────────────

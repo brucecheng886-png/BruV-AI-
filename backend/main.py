@@ -28,6 +28,16 @@ async def lifespan(app: FastAPI):
     logger.info("Starting AI Knowledge Base Backend...")
     from services.saga import init_saga_db
     init_saga_db()
+
+    # 確保 ORM 定義的所有表都存在（fresh install 時 init_db.sql 不含所有表）
+    try:
+        import models  # noqa: F401  載入所有 ORM 模型至 metadata
+        from database import engine, Base
+        async with engine.begin() as _conn:
+            await _conn.run_sync(Base.metadata.create_all)
+    except Exception as _e:
+        logger.warning(f"create_all skipped: {_e}")
+
     from database import ensure_qdrant_collection
     await ensure_qdrant_collection()
     # 初始化資料庫連線、Re-ranker 等
@@ -38,25 +48,35 @@ async def lifespan(app: FastAPI):
     try:
         from database import AsyncSessionLocal
         from sqlalchemy import text as _t
-        async with AsyncSessionLocal() as _db:
-            # 一次性 schema migration: knowledge_bases.agent_prompt
-            await _db.execute(_t(
-                "ALTER TABLE knowledge_bases ADD COLUMN IF NOT EXISTS agent_prompt TEXT"
-            ))
-            # 一次性 schema migration: users.display_name
-            await _db.execute(_t(
-                "ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name VARCHAR(100)"
-            ))
-            await _db.execute(_t(
+
+        # 各 migration / seed 用獨立連線，避免單一失敗讓後續全部跳過
+        seeds = [
+            ("ALTER TABLE knowledge_bases ADD COLUMN IF NOT EXISTS agent_prompt TEXT", {}),
+            ("ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name VARCHAR(100)", {}),
+            (
+                "INSERT INTO users (id, email, password, role) "
+                "VALUES (gen_random_uuid(), :em, :pw, 'admin') "
+                "ON CONFLICT (email) DO NOTHING",
+                {"em": "admin@local", "pw": "$2b$12$placeholder_hash_change_on_deploy"},
+            ),
+            (
                 "INSERT INTO agent_skills (page_key, name, user_prompt, is_enabled) "
                 "VALUES (:pk, :nm, :up, TRUE) "
-                "ON CONFLICT (page_key) DO NOTHING"
-            ), {
-                "pk": "kb",
-                "nm": "知識庫助理",
-                "up": "你是知識庫助理。你可以幫助使用者：\n- 搜尋知識庫文件\n- 回答知識庫相關問題\n- 協助整理和分類文件\n\n回答時請簡潔明確，優先使用繁體中文。",
-            })
-            await _db.commit()
+                "ON CONFLICT (page_key) DO NOTHING",
+                {
+                    "pk": "kb",
+                    "nm": "知識庫助理",
+                    "up": "你是知識庫助理。你可以幫助使用者：\n- 搜尋知識庫文件\n- 回答知識庫相關問題\n- 協助整理和分類文件\n\n回答時請簡潔明確，優先使用繁體中文。",
+                },
+            ),
+        ]
+        for sql, params in seeds:
+            try:
+                async with AsyncSessionLocal() as _db:
+                    await _db.execute(_t(sql), params)
+                    await _db.commit()
+            except Exception as _me:
+                print(f"[seed skip] {sql[:50]}... -> {_me}")
     except Exception as _e:
         logger.warning("Seed kb agent_skill failed: %s", _e)
 

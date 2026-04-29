@@ -1,7 +1,7 @@
-"""One-time script: set admin user password.
+﻿"""One-time script: set admin user password.
 
 Usage:
-  docker exec ai_kb_backend python scripts/update_admin_password.py <email> [new_password]
+  docker exec bruv_ai_backend python scripts/update_admin_password.py <email> [new_password]
 
 If email is omitted, reads ADMIN_EMAIL env var (default: admin@local).
 If password is omitted, reads ADMIN_PASSWORD env var (default: admin123456).
