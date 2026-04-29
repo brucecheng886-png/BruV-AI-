@@ -66,7 +66,7 @@ async def update_me(
     user: CurrentUser,
     db: AsyncSession = Depends(get_db),
 ):
-    if body.email is not None:
+    if body.email is not None and body.email != user.email:
         if not EMAIL_RE.match(body.email):
             raise HTTPException(status_code=400, detail="Email 格式不正確")
         dup = await db.execute(
