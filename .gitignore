@@ -53,3 +53,9 @@ qdrant_backup_*.tar.gz
 # Build artifacts
 # ============================================
 frontend/build_log.txt
+electron/dist_log.txt
+nginx_rebuild.txt
+*.log
+
+# Docker 開發 override（不進生產）
+docker-compose.override.yml

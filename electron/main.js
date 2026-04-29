@@ -945,13 +945,21 @@ app.whenReady().then(() => {
   // 注冊 setup IPC handlers（精靈視窗需要）
   setupSetupIPC(setupCompleteFile)
 
-  const setupComplete = fs.existsSync(setupCompleteFile)
+  // 開發模式（非 packaged）跳過設定精靈，假設容器已由 開發啟動.bat 啟動
+  const isDev = !app.isPackaged
+  const setupComplete = isDev || fs.existsSync(setupCompleteFile)
 
   if (!setupComplete) {
     // 首次執行：開啟設定精靈
     createSetupWizard()
+  } else if (isDev) {
+    // 開發模式：直接開啟主視窗，不啟動 Docker（容器應已由 .bat 啟動）
+    createSplash()
+    splashWindow.webContents.once('did-finish-load', () => {
+      waitForBackend()
+    })
   } else {
-    // 已設定完成：走正常啟動流程
+    // 已設定完成（packaged）：走正常啟動流程
     createSplash()
     splashWindow.webContents.once('did-finish-load', async () => {
       if (!await checkDocker()) return
