@@ -1,8 +1,9 @@
-const { app, BrowserWindow, shell, ipcMain, globalShortcut, Menu, MenuItem, clipboard, dialog, net } = require('electron')
+const { app, BrowserWindow, shell, ipcMain, globalShortcut, Menu, MenuItem, clipboard, dialog, net, safeStorage } = require('electron')
 const path = require('path')
 const https = require('https')
 const http = require('http')
 const fs = require('fs')
+const crypto = require('crypto')
 const { exec, spawn } = require('child_process')
 
 const TARGET_URL = 'http://localhost:80'
@@ -22,6 +23,84 @@ const resourcePath = app.isPackaged
   ? process.resourcesPath
   : path.join(__dirname, '..')
 const composePath = path.join(resourcePath, 'docker-compose.yml')
+const envPath = path.join(resourcePath, '.env')
+const envExamplePath = path.join(resourcePath, '.env.example')
+
+// ── 確認 .env 存在；若否，從 .env.example 複製一份 ────────────────────────
+function randomAlnum (length) {
+  // 使用 crypto.randomBytes 產生 base64，去掉非英數字，裁切指定長度
+  const bytes = crypto.randomBytes(length * 2)
+  const s = bytes.toString('base64').replace(/[^A-Za-z0-9]/g, '')
+  return s.slice(0, length)
+}
+
+/**
+ * 將 .env 中所有 changeme_ 佔位符及 PLUGIN_ENCRYPT_KEY 的 your_fernet_key_here
+ * 替換為隨機金鑰。已被替換過的欄位不會重複產生。
+ * 同步 NEO4J_AUTH = neo4j/<NEO4J_PASSWORD>。
+ */
+function randomizeEnvPlaceholders (filePath) {
+  if (!fs.existsSync(filePath)) return
+  const content = fs.readFileSync(filePath, 'utf8')
+  const lines = content.split(/\r?\n/)
+  const map = {}
+
+  // 長度規則：JWT_SECRET_KEY 用 32 字元，其餘 16
+  const lengthOf = (key) => key === 'JWT_SECRET_KEY' ? 32 : 16
+
+  // 第一輪：替換 changeme_* 與 PLUGIN_ENCRYPT_KEY 佔位符
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(/^([A-Z_][A-Z0-9_]*)=(.*)$/)
+    if (!m) continue
+    const key = m[1]
+    const val = m[2]
+    let newVal = null
+    if (val.startsWith('changeme_')) {
+      newVal = randomAlnum(lengthOf(key))
+    } else if (key === 'PLUGIN_ENCRYPT_KEY' && val === 'your_fernet_key_here') {
+      // Fernet 金鑰：32 bytes 的 URL-safe base64
+      newVal = crypto.randomBytes(32).toString('base64url') + '='
+    } else if (key === 'NEO4J_AUTH' && /^neo4j\/changeme_/.test(val)) {
+      // 第二輪才能引用 NEO4J_PASSWORD，此處先註記
+      continue
+    }
+    if (newVal !== null) {
+      lines[i] = `${key}=${newVal}`
+      map[key] = newVal
+    } else {
+      map[key] = val
+    }
+  }
+
+  // 第二輪：同步 NEO4J_AUTH
+  if (map.NEO4J_PASSWORD) {
+    for (let i = 0; i < lines.length; i++) {
+      const m = lines[i].match(/^NEO4J_AUTH=neo4j\/(.*)$/)
+      if (m && m[1].startsWith('changeme_')) {
+        lines[i] = `NEO4J_AUTH=neo4j/${map.NEO4J_PASSWORD}`
+      }
+    }
+  }
+
+  fs.writeFileSync(filePath, lines.join('\n'), 'utf8')
+}
+
+function ensureEnvFile () {
+  try {
+    if (!fs.existsSync(envPath)) {
+      if (fs.existsSync(envExamplePath)) {
+        fs.copyFileSync(envExamplePath, envPath)
+      } else {
+        // 無範本可複製，建立空白檔避免 docker compose 找不到
+        fs.writeFileSync(envPath, '', 'utf8')
+      }
+    }
+    // 隨機化佔位符（幂等：已被替換的欄位不會重生）
+    randomizeEnvPlaceholders(envPath)
+  } catch (err) {
+    console.error('[ensureEnvFile] 失敗：', err)
+  }
+}
 
 // ── Helper：Promise 包裝 exec ─────────────────────────────────────────────
 function runCommand (cmd, timeoutMs = 15000) {
@@ -141,10 +220,11 @@ async function ensureDockerRunning () {
  */
 async function startDockerServices () {
   updateLoadingStatus('正在啟動容器服務...')
+  ensureEnvFile()
   try {
     await new Promise((resolve, reject) => {
       exec(
-        `docker compose -f "${composePath}" up -d`,
+        `docker compose -f "${composePath}" --env-file "${envPath}" up -d`,
         { timeout: 120000 },
         (err) => { if (err) reject(err); else resolve() }
       )
@@ -232,6 +312,45 @@ function setupIPC () {
   ipcMain.on('win-minimize',     () => mainWindow?.minimize())
   ipcMain.on('win-maximize',     () => mainWindow?.isMaximized() ? mainWindow.unmaximize() : mainWindow.maximize())
   ipcMain.on('win-quit',         () => app.quit())
+
+  // ── Token 持久化（safeStorage）──
+  const tokenFilePath = () => path.join(app.getPath('userData'), 'token.enc')
+
+  ipcMain.handle('auth:save-token', (_, token) => {
+    try {
+      if (!safeStorage.isEncryptionAvailable()) {
+        return { success: false, error: 'safeStorage 不可用' }
+      }
+      const encrypted = safeStorage.encryptString(String(token || ''))
+      fs.writeFileSync(tokenFilePath(), encrypted)
+      return { success: true }
+    } catch (err) {
+      return { success: false, error: err.message }
+    }
+  })
+
+  ipcMain.handle('auth:load-token', () => {
+    try {
+      const fp = tokenFilePath()
+      if (!fs.existsSync(fp)) return { success: false }
+      if (!safeStorage.isEncryptionAvailable()) return { success: false }
+      const buf = fs.readFileSync(fp)
+      const token = safeStorage.decryptString(buf)
+      return { success: true, token }
+    } catch (err) {
+      return { success: false, error: err.message }
+    }
+  })
+
+  ipcMain.handle('auth:clear-token', () => {
+    try {
+      const fp = tokenFilePath()
+      if (fs.existsSync(fp)) fs.unlinkSync(fp)
+      return { success: true }
+    } catch (err) {
+      return { success: false, error: err.message }
+    }
+  })
 }
 
 // ── 右鍵選單（原生實作）─────────────────────────────────────────────────────
@@ -552,10 +671,8 @@ function setupSetupIPC (setupCompleteFile) {
 
   // ── Step 5: 儲存環境變數設定 ──
   ipcMain.handle('setup:saveEnvSettings', async (_, settings) => {
-    const envPath = path.join(resourcePath, '.env')
+    ensureEnvFile()
     const updates = {}
-    if (settings.adminEmail)    updates.ADMIN_EMAIL    = settings.adminEmail
-    if (settings.adminPassword) updates.ADMIN_PASSWORD = settings.adminPassword
     if (settings.anthropicApiKey !== undefined) updates.ANTHROPIC_API_KEY = settings.anthropicApiKey
     if (settings.openaiApiKey   !== undefined) updates.OPENAI_API_KEY     = settings.openaiApiKey
     if (settings.groqApiKey     !== undefined) updates.GROQ_API_KEY       = settings.groqApiKey
@@ -570,10 +687,11 @@ function setupSetupIPC (setupCompleteFile) {
 
   // ── Step 6: 啟動容器服務 ──
   ipcMain.handle('setup:startServices', async () => {
+    ensureEnvFile()
     try {
       await new Promise((resolve, reject) => {
         exec(
-          `docker compose -f "${composePath}" up -d`,
+          `docker compose -f "${composePath}" --env-file "${envPath}" up -d`,
           { timeout: 120000 },
           (err) => { if (err) reject(err); else resolve() }
         )
@@ -605,6 +723,41 @@ function setupSetupIPC (setupCompleteFile) {
       }
     }
     return { success: false, error: '後端服務無法在 90 秒內啟動' }
+  })
+
+  // ── 初始化管理員帳號（呼叫後端 API）──
+  ipcMain.handle('setup:initAdmin', async (_, { email, password }) => {
+    return await new Promise((resolve) => {
+      const data = JSON.stringify({ email, password })
+      const req = http.request({
+        hostname: 'localhost',
+        port: 80,
+        path: '/api/auth/init-admin',
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(data)
+        },
+        timeout: 15000,
+      }, (res) => {
+        let body = ''
+        res.on('data', chunk => { body += chunk })
+        res.on('end', () => {
+          if (res.statusCode === 200) {
+            try { resolve({ success: true, ...JSON.parse(body) }) }
+            catch { resolve({ success: true }) }
+          } else {
+            let detail = body
+            try { detail = JSON.parse(body).detail || body } catch {}
+            resolve({ success: false, status: res.statusCode, error: detail })
+          }
+        })
+      })
+      req.on('error', err => resolve({ success: false, error: err.message }))
+      req.on('timeout', () => { req.destroy(); resolve({ success: false, error: '請求逾時' }) })
+      req.write(data)
+      req.end()
+    })
   })
 
   // ── Step 6: 完成設定，寫入標記，開啟主視窗 ──
@@ -686,7 +839,7 @@ app.on('window-all-closed', async () => {
     detail: '停止服務將關閉所有 Docker 容器，下次啟動需要重新等待服務啟動。'
   })
   if (response === 0) {
-    exec(`docker compose -f "${composePath}" down`)
+    exec(`docker compose -f "${composePath}" --env-file "${envPath}" down`)
   }
   app.quit()
 })

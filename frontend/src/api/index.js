@@ -290,6 +290,16 @@ export const systemSettingsApi = {
     apiFetch('/api/settings/chat', { method: 'POST', headers: getHeaders(), body: JSON.stringify(body) }).then(handleResponse),
 }
 
+// ── Auth API（個人資料 / 修改密碼 / 取得當前使用者）──────────────
+export const authApi = {
+  getMe: () =>
+    apiFetch('/api/auth/me', { headers: getHeaders(false) }).then(handleResponse),
+  updateMe: (body) =>
+    apiFetch('/api/auth/me', { method: 'PATCH', headers: getHeaders(), body: JSON.stringify(body) }).then(handleResponse),
+  changePassword: (current_password, new_password) =>
+    apiFetch('/api/auth/change-password', { method: 'POST', headers: getHeaders(), body: JSON.stringify({ current_password, new_password }) }).then(handleResponse),
+}
+
 // Chat stream returns raw response for ReadableStream processing
 export async function chatStream(query, conversationId, model, signal = null, docIds = [], kbScopeId = null, docScopeIds = [], tagScopeIds = [], agentType = 'chat', mode = 'agent') {
   const auth = useAuthStore()

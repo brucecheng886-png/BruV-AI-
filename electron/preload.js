@@ -9,3 +9,10 @@ contextBridge.exposeInMainWorld('electronApp', {
   maximize:     () => ipcRenderer.send('win-maximize'),
   quit:         () => ipcRenderer.send('win-quit'),
 })
+
+// Token 持久化（safeStorage）
+contextBridge.exposeInMainWorld('electronAPI', {
+  saveToken:  (token) => ipcRenderer.invoke('auth:save-token', token),
+  loadToken:  ()      => ipcRenderer.invoke('auth:load-token'),
+  clearToken: ()      => ipcRenderer.invoke('auth:clear-token'),
+})

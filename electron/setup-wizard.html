@@ -929,6 +929,7 @@
   async function submitEnvSettings () {
     const email    = document.getElementById('admin-email').value.trim()
     const password = document.getElementById('admin-password').value
+    const confirm  = document.getElementById('admin-password-confirm').value
     let valid = true
 
     // Validate email
@@ -953,11 +954,24 @@
       pwErr.style.display = 'none'
     }
 
+    // Validate confirm
+    const cfmErr = document.getElementById('password-confirm-error')
+    if (password !== confirm) {
+      document.getElementById('admin-password-confirm').classList.add('invalid')
+      cfmErr.style.display = 'block'
+      valid = false
+    } else {
+      document.getElementById('admin-password-confirm').classList.remove('invalid')
+      cfmErr.style.display = 'none'
+    }
+
     if (!valid) return
 
+    // 暫存帳密，Step 6 中在後端就緒後呼叫 init-admin
+    adminCreds.email    = email
+    adminCreds.password = password
+
     const settings = {
-      adminEmail:    email,
-      adminPassword: password,
       useCloudAI:    document.getElementById('use-cloud-ai').checked,
       anthropicApiKey: document.getElementById('anthropic-key').value.trim(),
       openaiApiKey:    document.getElementById('openai-key').value.trim(),
@@ -1010,6 +1024,20 @@
     }
     setCstep('backend', 'done', '後端已就緒')
 
+    // 2.5 初始化管理員帳號
+    if (adminCreds.email && adminCreds.password) {
+      const initResult = await window.setupBridge.initAdmin(
+        adminCreds.email, adminCreds.password
+      )
+      if (!initResult.success) {
+        // 403 = 已初始化（重裝情境，該帳號已存在）→ 視為 OK、繼續
+        if (initResult.status !== 403) {
+          showCompletionError('管理員帳號設定失敗：' + (initResult.error || '未知錯誤'))
+          return
+        }
+      }
+    }
+
     // 3. Complete setup and open main window
     setCstep('open', 'running', '正在開啟主視窗...')
     await window.setupBridge.completeSetup()
@@ -1023,6 +1051,5 @@
     banner.classList.add('visible')
     document.getElementById('completion-retry-row').style.display = 'flex'
   }
-</script>
 </body>
 </html>

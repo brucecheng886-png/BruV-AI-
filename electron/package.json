@@ -30,8 +30,8 @@
         "to": "docker-compose.yml"
       },
       {
-        "from": "../.env",
-        "to": ".env"
+        "from": "../.env.example",
+        "to": ".env.example"
       }
     ],
     "win": {

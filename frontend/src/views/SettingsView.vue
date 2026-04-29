@@ -324,6 +324,22 @@
             </el-descriptions>
           </el-card>
 
+          <!-- 個人資料 -->
+          <el-card style="margin-bottom:20px;">
+            <template #header><b>個人資料</b></template>
+            <el-form :model="profileForm" label-width="110px" label-position="left">
+              <el-form-item label="顯示名稱">
+                <el-input v-model="profileForm.display_name" placeholder="（選填）" maxlength="100" style="width:260px;" />
+              </el-form-item>
+              <el-form-item label="Email">
+                <el-input v-model="profileForm.email" type="email" style="width:260px;" />
+              </el-form-item>
+              <el-form-item>
+                <el-button type="primary" :loading="profileSaving" @click="saveProfile">儲存個人資料</el-button>
+              </el-form-item>
+            </el-form>
+          </el-card>
+
           <!-- 修改密碼 -->
           <el-card>
             <template #header><b>修改密碼</b></template>
@@ -561,7 +577,7 @@ import { ref, onMounted, onActivated, reactive, defineComponent, computed } from
 import { useRoute } from 'vue-router'
 import { Refresh, Check } from '@element-plus/icons-vue'
 import { Layers, FolderOpen, MessageSquare, Network, Puzzle, Settings, Dna, Cpu, Key, Sliders, HardDrive, Database, Bot, User, Link, BookOpen } from 'lucide-vue-next'
-import { wikiApi, systemSettingsApi, agentSkillsApi, monitoringApi } from '../api/index.js'
+import { wikiApi, systemSettingsApi, agentSkillsApi, monitoringApi, authApi } from '../api/index.js'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuthStore } from '../stores/auth.js'
 
@@ -1238,6 +1254,45 @@ const pwdForm = reactive({
   confirm_password: '',
 })
 
+const profileSaving = ref(false)
+const profileForm = reactive({
+  display_name: '',
+  email: '',
+})
+
+async function loadProfile () {
+  try {
+    const me = await authApi.getMe()
+    profileForm.display_name = me.display_name || ''
+    profileForm.email = me.email || ''
+    authStore.setProfile(me)
+  } catch {
+    /* 靜默 */
+  }
+}
+
+async function saveProfile () {
+  if (!profileForm.email) {
+    ElMessage.warning('Email 不能為空')
+    return
+  }
+  profileSaving.value = true
+  try {
+    const me = await authApi.updateMe({
+      email: profileForm.email,
+      display_name: profileForm.display_name,
+    })
+    authStore.setProfile(me)
+    ElMessage.success('個人資料已更新')
+  } catch (e) {
+    ElMessage.error(e.message)
+  } finally {
+    profileSaving.value = false
+  }
+}
+
+onMounted(loadProfile)
+
 async function changePassword() {
   if (!pwdForm.current_password || !pwdForm.new_password) {
     ElMessage.warning('請填寫所有密碼欄位')
@@ -1253,7 +1308,7 @@ async function changePassword() {
   }
   pwdSaving.value = true
   try {
-    await systemSettingsApi.changePassword(pwdForm.current_password, pwdForm.new_password)
+    await authApi.changePassword(pwdForm.current_password, pwdForm.new_password)
     ElMessage.success('密碼已更新，請用新密碼重新登入')
     pwdForm.current_password = ''
     pwdForm.new_password = ''

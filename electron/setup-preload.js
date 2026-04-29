@@ -36,6 +36,10 @@ contextBridge.exposeInMainWorld('setupBridge', {
   // Step 6: 寫入完成標記，關閉精靈，開啟主視窗
   completeSetup: () => ipcRenderer.invoke('setup:completeSetup'),
 
+  // Step 6: 初始化管理員帳號（呼叫後端 init-admin API）
+  initAdmin: (email, password) =>
+    ipcRenderer.invoke('setup:initAdmin', { email, password }),
+
   // 通用：在系統瀏覽器開啟外部連結
   openExternal: (url) => ipcRenderer.invoke('setup:openExternal', url),
 })

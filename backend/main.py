@@ -43,6 +43,10 @@ async def lifespan(app: FastAPI):
             await _db.execute(_t(
                 "ALTER TABLE knowledge_bases ADD COLUMN IF NOT EXISTS agent_prompt TEXT"
             ))
+            # 一次性 schema migration: users.display_name
+            await _db.execute(_t(
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name VARCHAR(100)"
+            ))
             await _db.execute(_t(
                 "INSERT INTO agent_skills (page_key, name, user_prompt, is_enabled) "
                 "VALUES (:pk, :nm, :up, TRUE) "
