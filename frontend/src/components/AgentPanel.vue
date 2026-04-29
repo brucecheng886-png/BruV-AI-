@@ -3,6 +3,7 @@ import { ref, reactive, computed, nextTick, onMounted, onUnmounted, watch, watch
 import { useRoute } from 'vue-router'
 import { chatStream, agentApi, kbApi, docsApi, conversationsApi, ontologyApi, pluginsApi, wikiApi } from '../api/index.js'
 import { useChatStore } from '../stores/chat.js'
+import { storeToRefs } from 'pinia'
 import { Monitor, Globe, BookOpen, X, ArrowUp, Square, Plus, Paperclip, FileSpreadsheet, Bot, MessageCircle, ListChecks, Clock, ChevronDown, Check, Copy } from 'lucide-vue-next'
 import { marked } from 'marked'
 import hljs from 'highlight.js/lib/core'
@@ -17,7 +18,7 @@ import css from 'highlight.js/lib/languages/css'
 import { ElMessage } from 'element-plus'
 
 const chatStore = useChatStore()
-
+const { selectedModel } = storeToRefs(chatStore)
 // ── highlight.js ─────────────────────────────────────
 ;[['javascript', javascript], ['python', python], ['typescript', typescript],
   ['sql', sql], ['bash', bash], ['shell', bash], ['json', json],
@@ -146,7 +147,6 @@ const activeScopeKbId = computed(() => {
 
 // ── Agent mode & model ────────────────────────────────────
 const agentMode      = ref('agent')  // 'agent' | 'ask' | 'plan'
-const selectedModel  = ref('')
 const localModels    = ref([])
 const cloudModels    = ref([])
 const modelPopoverVisible = ref(false)
@@ -156,6 +156,49 @@ const availableModels = computed(() => [
 ])
 const MODE_LABELS = { agent: 'Agent', ask: 'Ask', plan: 'Plan' }
 const MODE_ICONS  = { agent: Bot, ask: MessageCircle, plan: ListChecks }
+
+// ── @mention 與 @agent 子選單 ─────────────────────────────
+const attachedDocs = ref([])
+const mentionMenu  = reactive({ show: false, docs: [] })
+const agentMenu    = reactive({ show: false })
+
+async function searchMentionDocs(q) {
+  try {
+    const res = await docsApi.list({ search: q, page_size: 8 })
+    mentionMenu.docs = (res.items || res || []).slice(0, 8)
+    mentionMenu.show = mentionMenu.docs.length > 0
+  } catch {
+    mentionMenu.show = false
+  }
+}
+function applyMention(doc) {
+  inputText.value = inputText.value.replace(/@\S*$/, '')
+  mentionMenu.show = false
+  if (!attachedDocs.value.find(d => d.id === doc.id)) attachedDocs.value.push(doc)
+}
+function applyAgentMode(mode) {
+  inputText.value = inputText.value.replace(/@\S*$/, '')
+  agentMenu.show = false
+  agentMode.value = mode
+  ElMessage.success(`已切換至 ${MODE_LABELS[mode]} 模式`)
+}
+function onInput() {
+  const text = inputText.value
+  const atMatch = text.match(/@(\S*)$/)
+  if (!atMatch) {
+    mentionMenu.show = false
+    agentMenu.show = false
+    return
+  }
+  const q = atMatch[1].toLowerCase()
+  if (q !== '' && 'agent'.startsWith(q)) {
+    agentMenu.show = true
+    mentionMenu.show = false
+  } else {
+    agentMenu.show = false
+    searchMentionDocs(atMatch[1])
+  }
+}
 
 // ── Scope popover state ──────────────────────────────────
 const pagePopoverOpen = ref(false)
@@ -309,6 +352,8 @@ async function sendMessage() {
   if (activeScope.value.startsWith('kb:') && !activeScopeKbId.value) return
 
   inputText.value = ''
+  mentionMenu.show = false
+  agentMenu.show = false
   const tab = currentScopeState.value
   tab.messages.push({ role: 'user', content: text })
   scrollToBottom()
@@ -336,7 +381,7 @@ async function runChat(text, tab) {
   try {
     const resp = await chatStream(
       text, _tabConvId(), selectedModel.value || null, abortController.signal,
-      [], kbScopeId, [], [], agentType, agentMode.value
+      attachedDocs.value.map(d => d.id), kbScopeId, [], [], agentType, agentMode.value
     )
     if (!resp.ok) { aiMsg.content = '⚠️ 請求失敗'; aiMsg.streaming = false; return }
 
@@ -368,6 +413,14 @@ async function runChat(text, tab) {
           const evt = JSON.parse(raw)
           if (evt.type === 'token') { aiMsg.content += evt.text; scrollToBottom() }
           else if (evt.type === 'error') aiMsg.content = '⚠️ ' + evt.text
+          else if (evt.type === 'sources') { aiMsg.sources = evt.sources || [] }
+          else if (evt.type === 'action_result') {
+            if (!aiMsg.actionResults) aiMsg.actionResults = []
+            if (!aiMsg._backendTypes) aiMsg._backendTypes = []
+            aiMsg.actionResults.push(evt.result)
+            aiMsg._backendTypes.push(evt.action_type)
+            if (evt.dispatch) window.dispatchEvent(new CustomEvent('ai-action', { detail: { type: evt.dispatch } }))
+          }
         } catch {}
       }
     }
@@ -403,10 +456,13 @@ async function handlePageAction(aiMsg) {
   if (!matches.length) return
   aiMsg.content = aiMsg.content.replace(ACTION_RE, '').trimEnd()
   if (!aiMsg.actionResults) aiMsg.actionResults = []
+  // Skip action types already executed by backend (populated via action_result SSE events)
+  const _backendDone = new Set(aiMsg._backendTypes || [])
   for (const m of matches) {
     let action
     try { action = JSON.parse(m[1]) } catch { continue }
     const { type, ...params } = action
+    if (_backendDone.has(type)) continue  // backend already handled
     let result = ''
     try {
       switch (type) {
@@ -414,8 +470,34 @@ async function handlePageAction(aiMsg) {
           const kb = await kbApi.create({ name: params.name, description: params.description || '' })
           result = `✅ 已建立知識庫「${kb.name}」`; break
         }
+        case 'delete_kb': {
+          await kbApi.delete(params.kb_id)
+          result = `✅ 已刪除知識庫`
+          window.dispatchEvent(new CustomEvent('ai-action', { detail: { type: 'reload_kbs' } }))
+          break
+        }
+        case 'batch_delete_kb': {
+          const kbIds = Array.isArray(params.kb_ids) ? params.kb_ids : []
+          let ok = 0, fail = 0
+          for (const kid of kbIds) {
+            try { await kbApi.delete(kid); ok++ } catch { fail++ }
+          }
+          result = `✅ 已刪除 ${ok} 個知識庫${fail > 0 ? `，失敗 ${fail} 個` : ''}`
+          window.dispatchEvent(new CustomEvent('ai-action', { detail: { type: 'reload_kbs' } }))
+          break
+        }
         case 'delete_doc': {
           await docsApi.delete(params.doc_id); result = `✅ 已刪除文件`; break
+        }
+        case 'batch_delete_doc': {
+          const docIds = Array.isArray(params.doc_ids) ? params.doc_ids : []
+          let ok = 0, fail = 0
+          for (const did of docIds) {
+            try { await docsApi.delete(did); ok++ } catch { fail++ }
+          }
+          result = `✅ 已刪除 ${ok} 篇文件${fail > 0 ? `，失敗 ${fail} 篇` : ''}`
+          window.dispatchEvent(new CustomEvent('ai-action', { detail: { type: 'reload_docs' } }))
+          break
         }
         case 'search_docs': {
           try {
@@ -582,6 +664,43 @@ function stopStreaming() {
 }
 
 // ── Plus menu handler ─────────────────────────────────────
+function _scopeKbId() {
+  return activeScope.value.startsWith('kb:') ? activeScope.value.slice(3) : null
+}
+
+async function _runUpload(file) {
+  const tab = currentScopeState.value
+  const aiMsg = { role: 'assistant', content: `⏳ 上傳中：${file.name}…`, streaming: false }
+  tab.messages.push(aiMsg)
+  await nextTick(); scrollToBottom()
+  try {
+    const kbId = _scopeKbId()
+    const r = await docsApi.upload(file, kbId)
+    aiMsg.content = `✅ 已上傳 **${file.name}**（doc_id: \`${r.doc_id || '?'}\`），背景處理中。`
+    window.dispatchEvent(new CustomEvent('ai-action', { detail: { type: 'reload_docs' } }))
+  } catch (e) {
+    aiMsg.content = `❌ 上傳失敗：${e.message}`
+  }
+}
+
+async function _runImportExcel(file) {
+  const tab = currentScopeState.value
+  const aiMsg = { role: 'assistant', content: `⏳ 解析 ${file.name} 中…`, streaming: false }
+  tab.messages.push(aiMsg)
+  await nextTick(); scrollToBottom()
+  try {
+    const kbId = _scopeKbId()
+    const r = await docsApi.importExcel(file, kbId)
+    const total = r.total ?? 0
+    const queued = r.queued ?? 0
+    const skipped = r.skipped ?? 0
+    aiMsg.content = `✅ 匯入完成：共 ${total} 筆，排入處理 **${queued}**，跳過 ${skipped}。`
+    window.dispatchEvent(new CustomEvent('ai-action', { detail: { type: 'reload_docs' } }))
+  } catch (e) {
+    aiMsg.content = `❌ 匯入失敗：${e.message}`
+  }
+}
+
 function handlePlusCommand(cmd) {
   if (cmd === 'upload') {
     const input = document.createElement('input')
@@ -589,7 +708,7 @@ function handlePlusCommand(cmd) {
     input.accept = '.pdf,.docx,.txt,.md,.xlsx,.xls,.csv'
     input.onchange = (e) => {
       const file = e.target.files[0]
-      if (file) window.dispatchEvent(new CustomEvent('agent-upload-file', { detail: { file } }))
+      if (file) _runUpload(file)
     }
     input.click()
   } else if (cmd === 'import_excel') {
@@ -598,7 +717,7 @@ function handlePlusCommand(cmd) {
     input.accept = '.xlsx,.xls,.csv'
     input.onchange = (e) => {
       const file = e.target.files[0]
-      if (file) window.dispatchEvent(new CustomEvent('agent-import-excel', { detail: { file } }))
+      if (file) _runImportExcel(file)
     }
     input.click()
   }
@@ -642,9 +761,6 @@ onMounted(async () => {
       m => (m.model_type || 'chat') === 'chat' && m.provider && m.provider !== 'ollama'
     )
   } catch {}
-  if (!selectedModel.value && availableModels.value.length) {
-    selectedModel.value = availableModels.value[0]
-  }
   _loadFabPos()
   window.addEventListener('resize', _onResize)
 })
@@ -892,7 +1008,15 @@ function onFabMouseup() {
               <div v-if="msg.content" class="markdown-body" v-html="renderMd(msg.content)"></div>
               <span v-if="msg.streaming && msg.content" class="cursor">▌</span>
               <template v-if="msg.actionResults && msg.actionResults.length">
-                <div v-for="(r, ri) in msg.actionResults" :key="ri" class="panel-action-result">{{ r }}</div>
+                <div class="panel-action-collapse">
+                  <button class="panel-action-toggle" @click="msg.actionResultsOpen = !msg.actionResultsOpen">
+                    <ChevronDown :size="12" :stroke-width="2" class="action-chevron" :class="{ open: msg.actionResultsOpen }" />
+                    <span>已執行 {{ msg.actionResults.length }} 個操作</span>
+                  </button>
+                  <div v-if="msg.actionResultsOpen" class="panel-action-list">
+                    <div v-for="(r, ri) in msg.actionResults" :key="ri" class="panel-action-result">{{ r }}</div>
+                  </div>
+                </div>
               </template>
             </div>
             <div v-if="!msg.streaming && msg.content" class="msg-actions ai-actions">
@@ -905,13 +1029,39 @@ function onFabMouseup() {
       <!-- Input -->
       <div class="panel-input-area">
         <div class="panel-input-card">
+          <div v-if="mentionMenu.show" class="panel-cmd-menu">
+            <div v-for="doc in mentionMenu.docs" :key="doc.id" class="panel-cmd-item" @mousedown.prevent="applyMention(doc)">
+              <span>📄</span><span>{{ doc.filename }}</span>
+            </div>
+          </div>
+          <div v-if="agentMenu.show" class="panel-cmd-menu">
+            <div class="panel-cmd-item" @mousedown.prevent="applyAgentMode('agent')">
+              <span>🤖</span><span>@agent</span><span class="panel-cmd-desc">執行操作</span>
+            </div>
+            <div class="panel-cmd-item" @mousedown.prevent="applyAgentMode('ask')">
+              <span>💬</span><span>@ask</span><span class="panel-cmd-desc">純問答</span>
+            </div>
+            <div class="panel-cmd-item" @mousedown.prevent="applyAgentMode('plan')">
+              <span>📋</span><span>@plan</span><span class="panel-cmd-desc">規劃確認</span>
+            </div>
+          </div>
+          <div v-if="attachedDocs.length" class="panel-attached-docs">
+            <el-tag
+              v-for="d in attachedDocs"
+              :key="d.id"
+              size="small"
+              closable
+              @close="attachedDocs.splice(attachedDocs.indexOf(d), 1)"
+            >📄 {{ d.filename }}</el-tag>
+          </div>
           <el-input
             v-model="inputText"
             type="textarea"
             :autosize="{ minRows: 2, maxRows: 6 }"
-            placeholder="輸入問題… Enter 送出"
+            placeholder="輸入問題… Enter 送出（@文件 引用、@agent 切模式）"
             class="panel-textarea"
             :disabled="currentScopeState.streaming"
+            @input="onInput"
             @keydown.enter.exact.prevent="sendMessage"
           />
           <div class="panel-input-footer">
@@ -970,14 +1120,14 @@ function onFabMouseup() {
                 <div class="model-popover-content">
                   <div class="model-section" v-if="localModels.length">
                     <div class="model-section-title">本地模型</div>
-                    <div v-for="m in localModels" :key="m" class="model-option" @click="selectedModel = m; modelPopoverVisible = false">
+                    <div v-for="m in localModels" :key="m" class="model-option" @click="chatStore.setSelectedModel(m); modelPopoverVisible = false">
                       <span class="model-option-name">{{ m }}</span>
                       <Check v-if="selectedModel === m" :size="14" :stroke-width="2" class="model-check" />
                     </div>
                   </div>
                   <div class="model-section" v-if="cloudModels.length">
                     <div class="model-section-title">雲端模型</div>
-                    <div v-for="m in cloudModels" :key="m.name" class="model-option" @click="selectedModel = m.name; modelPopoverVisible = false">
+                    <div v-for="m in cloudModels" :key="m.name" class="model-option" @click="chatStore.setSelectedModel(m.name); modelPopoverVisible = false">
                       <div>
                         <div class="model-option-name">{{ m.name }}</div>
                         <div class="model-option-desc">{{ m.developer || m.provider }}</div>
@@ -1279,6 +1429,12 @@ function onFabMouseup() {
 @keyframes ap-cur-blink { 0%,100%{opacity:0.7} 50%{opacity:0} }
 
 .panel-action-result { margin-top: 6px; padding: 5px 10px; background: #f0faf0; border: 1px solid #b7ddb7; border-radius: 6px; font-size: 12px; color: #2d6a2d; }
+.panel-action-collapse { margin-top: 8px; }
+.panel-action-toggle { display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border: 1px solid #d4e8d4; border-radius: 12px; background: #f6fbf6; color: #2d6a2d; font-size: 11px; cursor: pointer; transition: background .15s; }
+.panel-action-toggle:hover { background: #eaf5ea; }
+.panel-action-toggle .action-chevron { transition: transform .2s; }
+.panel-action-toggle .action-chevron.open { transform: rotate(180deg); }
+.panel-action-list { margin-top: 4px; }
 
 /* ── Markdown body ────────────────────────────────────────── */
 :deep(.markdown-body) { font-size: 13px; line-height: 1.75; color: #1e293b; }
@@ -1348,6 +1504,27 @@ function onFabMouseup() {
   transition: box-shadow 0.2s, border-color 0.2s;
 }
 .panel-input-card:focus-within { box-shadow: 0 0 0 3px rgba(37,99,235,0.1); border-color: #93c5fd; }
+.panel-cmd-menu {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 0; right: 0;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.08);
+  padding: 6px;
+  max-height: 240px;
+  overflow-y: auto;
+  z-index: 20;
+}
+.panel-cmd-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 10px; border-radius: 6px;
+  cursor: pointer; font-size: 13px;
+}
+.panel-cmd-item:hover { background: #f1f5f9; }
+.panel-cmd-desc { color: #94a3b8; font-size: 11px; margin-left: auto; }
+.panel-attached-docs { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 6px; }
 :deep(.panel-textarea .el-textarea__inner) {
   border: none !important;
   background: transparent !important;

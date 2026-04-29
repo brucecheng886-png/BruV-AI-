@@ -9,6 +9,7 @@ Chat Router — RAG 問答 + SSE 串流
 """
 import json
 import logging
+import re
 import uuid
 from datetime import datetime, timezone
 from typing import AsyncIterator, Optional
@@ -17,18 +18,177 @@ import httpx
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from sqlalchemy import func, select, update as sa_update
+from sqlalchemy import func, select, update as sa_update, text as sa_text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from qdrant_client.models import Filter, FieldCondition, MatchValue, MatchAny
 from auth import CurrentUser
 from database import get_db, get_qdrant_client
-from models import Conversation, Message
+from models import Conversation, Message, KnowledgeBase, Document
 from services.reranker import get_reranker
 from routers.settings_router import get_rag_runtime_config, get_kb_schema, get_chat_runtime_config
+from prompts import RAG_SYSTEM_PROMPT, TITLE_GEN_PROMPT, REFLECTION_JUDGE_PROMPT, REFLECTION_TOTAL_THRESHOLD
+from prompts.page_agents import get_page_agent_prompt
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+# ── 後端 Action 執行器 ────────────────────────────────────────
+
+_ACTION_RE_BACKEND = re.compile(r'__action__:(\{[^\n]+\})')
+# Write operations that backend handles (read ops list_kbs/list_all_docs handled by frontend)
+_BACKEND_WRITE_TYPES = frozenset({
+    "delete_kb", "batch_delete_kb", "create_kb",
+    "delete_doc", "batch_delete_doc",
+    "move_to_kb", "batch_move_to_kb", "edit_doc",
+    "delete_conv",
+    "batch_approve_all", "batch_reject_all",
+    "toggle_plugin",
+})
+
+
+async def _execute_action_backend(action: dict, db) -> tuple[str, str | None]:
+    """Execute a write action directly on the backend.
+    Returns (result_text, dispatch_event_type | None)"""
+    from sqlalchemy import select, text as _sqlt, update as _sqlu, delete as _sqld
+    from models import KnowledgeBase as _KB, Document as _Doc, DocumentKnowledgeBase as _DKB, Conversation as _Conv
+    from datetime import datetime, timezone
+
+    atype = action.get("type", "")
+    try:
+        if atype == "delete_kb":
+            kid = action.get("kb_id", "")
+            row = (await db.execute(select(_KB).where(_KB.id == kid))).scalar_one_or_none()
+            if not row:
+                return f"❌ 找不到知識庫 {kid}", None
+            await db.delete(row)
+            await db.commit()
+            return "✅ 已刪除知識庫", "reload_kbs"
+
+        elif atype == "batch_delete_kb":
+            kb_ids = action.get("kb_ids", [])
+            ok = fail = 0
+            for kid in kb_ids:
+                row = (await db.execute(select(_KB).where(_KB.id == kid))).scalar_one_or_none()
+                if row:
+                    await db.delete(row); ok += 1
+                else:
+                    fail += 1
+            await db.commit()
+            return f"✅ 已刪除 {ok} 個知識庫{f'，失敗 {fail} 個' if fail else ''}", "reload_kbs"
+
+        elif atype == "create_kb":
+            name = action.get("name", "新知識庫")
+            desc = action.get("description", "")
+            new_kb = _KB(id=str(uuid.uuid4()), name=name, description=desc)
+            db.add(new_kb)
+            await db.commit()
+            return f"✅ 已建立知識庫「{name}」", "reload_kbs"
+
+        elif atype == "delete_doc":
+            did = action.get("doc_id", "")
+            row = (await db.execute(select(_Doc).where(_Doc.id == did))).scalar_one_or_none()
+            if not row:
+                return f"❌ 找不到文件 {did}", None
+            row.deleted_at = datetime.now(timezone.utc)
+            await db.commit()
+            return "✅ 已刪除文件", "reload_docs"
+
+        elif atype == "batch_delete_doc":
+            doc_ids = action.get("doc_ids", [])
+            ok = fail = 0
+            now = datetime.now(timezone.utc)
+            for did in doc_ids:
+                row = (await db.execute(select(_Doc).where(_Doc.id == did))).scalar_one_or_none()
+                if row:
+                    row.deleted_at = now; ok += 1
+                else:
+                    fail += 1
+            await db.commit()
+            return f"✅ 已刪除 {ok} 篇文件{f'，失敗 {fail} 篇' if fail else ''}", "reload_docs"
+
+        elif atype == "move_to_kb":
+            did, kid = action.get("doc_id", ""), action.get("kb_id", "")
+            row = (await db.execute(select(_Doc).where(_Doc.id == did))).scalar_one_or_none()
+            if not row:
+                return f"❌ 找不到文件 {did}", None
+            row.knowledge_base_id = kid
+            await db.execute(_sqld(_DKB).where(_DKB.doc_id == did))
+            if kid:
+                db.add(_DKB(doc_id=did, kb_id=kid, source="manual"))
+            await db.commit()
+            return "✅ 已移入知識庫", "reload_docs"
+
+        elif atype == "batch_move_to_kb":
+            doc_ids = action.get("doc_ids", [])
+            kid = action.get("kb_id", "")
+            ok = fail = 0
+            for did in doc_ids:
+                row = (await db.execute(select(_Doc).where(_Doc.id == did))).scalar_one_or_none()
+                if row:
+                    row.knowledge_base_id = kid
+                    await db.execute(_sqld(_DKB).where(_DKB.doc_id == did))
+                    if kid:
+                        db.add(_DKB(doc_id=did, kb_id=kid, source="manual"))
+                    ok += 1
+                else:
+                    fail += 1
+            await db.commit()
+            return f"✅ 已移入知識庫：{ok} 篇{f'，找不到 {fail} 篇' if fail else ''}", "reload_docs"
+
+        elif atype == "edit_doc":
+            did = action.get("doc_id", "")
+            row = (await db.execute(select(_Doc).where(_Doc.id == did))).scalar_one_or_none()
+            if not row:
+                return f"❌ 找不到文件 {did}", None
+            if action.get("title"):
+                row.title = action["title"]
+            if action.get("description") is not None:
+                row.description = action.get("description")
+            await db.commit()
+            return "✅ 已更新文件 metadata", "reload_docs"
+
+        elif atype == "delete_conv":
+            cid = action.get("conv_id", "")
+            row = (await db.execute(select(_Conv).where(_Conv.id == cid))).scalar_one_or_none()
+            if not row:
+                return f"❌ 找不到對話 {cid}", None
+            await db.delete(row)
+            await db.commit()
+            return "✅ 已刪除對話", None
+
+        elif atype == "batch_approve_all":
+            res = await db.execute(
+                _sqlt("UPDATE ontology_review_queue SET status='approved' WHERE status='pending' RETURNING id")
+            )
+            count = len(res.fetchall())
+            await db.commit()
+            return f"✅ 已批次核准 {count} 筆實體", None
+
+        elif atype == "batch_reject_all":
+            res = await db.execute(
+                _sqlt("UPDATE ontology_review_queue SET status='rejected' WHERE status='pending' RETURNING id")
+            )
+            count = len(res.fetchall())
+            await db.commit()
+            return f"✅ 已批次拒絕 {count} 筆實體", None
+
+        elif atype == "toggle_plugin":
+            from models import Plugin as _Plugin
+            pid = action.get("plugin_id", "")
+            enabled = bool(action.get("enabled", True))
+            await db.execute(
+                _sqlu(_Plugin).where(_Plugin.id == pid).values(enabled=enabled)
+            )
+            await db.commit()
+            return f"✅ 已{'啟用' if enabled else '停用'}插件", None
+
+        else:
+            return f"⚠️ 後端不支援操作類型：{atype}", None
+
+    except Exception as _e:
+        logger.warning("_execute_action_backend [%s] error: %s", atype, _e)
+        return f"❌ 操作失敗：{_e}", None
 
 # 預設值（DB 無設定時使用）
 QDRANT_SEARCH_TOP_K = 20
@@ -73,34 +233,40 @@ class MessageOut(BaseModel):
     content: str
     sources: list
     created_at: str
+    regenerated_from: str | None = None
 
 
 # ── SSE 產生器 ────────────────────────────────────────────────
 
 async def _embed_query(query: str, settings, model: str | None = None, provider: str | None = None,
                       base_url: str | None = None, api_key: str | None = None) -> list[float]:
-    """查詢嵌入：預設走 Ollama bge-m3；可依 KB 設定覆寫為雲端 provider。"""
-    if model and provider and provider != "ollama":
-        url = (base_url or "https://api.openai.com").rstrip("/")
-        if not url.endswith("/v1"):
-            url = f"{url}/v1"
+    """查詢嵌入：預設走 Ollama bge-m3；可依 KB 設定覆寫為雲端 provider。
+    任何失敗均回傳 [] 並記錄警告，避免讓上層 SSE 連線崩斷（退化為無 RAG 模式）。"""
+    try:
+        if model and provider and provider != "ollama":
+            url = (base_url or "https://api.openai.com").rstrip("/")
+            if not url.endswith("/v1"):
+                url = f"{url}/v1"
+            async with httpx.AsyncClient(timeout=60) as client:
+                resp = await client.post(
+                    f"{url}/embeddings",
+                    headers={"Authorization": f"Bearer {api_key or ''}", "Content-Type": "application/json"},
+                    json={"model": model, "input": query},
+                )
+                resp.raise_for_status()
+                data = resp.json().get("data", [])
+                return data[0].get("embedding", []) if data else []
+        use_model = model if (model and (not provider or provider == "ollama")) else settings.OLLAMA_EMBED_MODEL
         async with httpx.AsyncClient(timeout=60) as client:
             resp = await client.post(
-                f"{url}/embeddings",
-                headers={"Authorization": f"Bearer {api_key or ''}", "Content-Type": "application/json"},
-                json={"model": model, "input": query},
+                f"{settings.OLLAMA_BASE_URL}/api/embed",
+                json={"model": use_model, "input": [query]},
             )
             resp.raise_for_status()
-            data = resp.json().get("data", [])
-            return data[0].get("embedding", []) if data else []
-    use_model = model if (model and (not provider or provider == "ollama")) else settings.OLLAMA_EMBED_MODEL
-    async with httpx.AsyncClient(timeout=60) as client:
-        resp = await client.post(
-            f"{settings.OLLAMA_BASE_URL}/api/embed",
-            json={"model": use_model, "input": [query]},
-        )
-        resp.raise_for_status()
-        return resp.json().get("embeddings", [[]])[0]
+            return resp.json().get("embeddings", [[]])[0]
+    except Exception as e:
+        logger.warning("embed_query failed (provider=%s, model=%s): %s — fallback to no-RAG", provider, model, e)
+        return []
 
 
 # ── 對話摘要常數 ──────────────────────────────────────────────────
@@ -162,165 +328,8 @@ async def _summarize_history(
     return summary
 
 
-# page_agent 對應的角色說明
-_PAGE_AGENT_PROMPTS: dict[str, str] = {
-    "docs": """你是文件管理頁面的 AI 助理。
-
-## 可執行操作
-當使用者要求執行操作時，在回應末尾加上 __action__:{...}（單行 JSON）：
-
-建立知識庫：
-__action__:{"type":"create_kb","name":"KB名稱","description":"描述"}
-
-刪除文件：
-__action__:{"type":"delete_doc","doc_id":"uuid"}
-
-搜尋文件（查詢狀態、標題、內容）：
-__action__:{"type":"search_docs","query":"關鍵字","top_k":20}
-
-列出所有知識庫（建議分類前先知道現有 KB）：
-__action__:{"type":"list_kbs"}
-
-列出所有文件（取得 doc_id 和 kb_id，執行 move_to_kb / edit_doc 前必須先呼叫）：
-__action__:{"type":"list_all_docs"}
-
-將文件移入知識庫（單一文件）：
-__action__:{"type":"move_to_kb","doc_id":"uuid","kb_id":"uuid"}
-
-批次將多篇文件移入同一知識庫：
-__action__:{"type":"batch_move_to_kb","doc_ids":["uuid1","uuid2"],"kb_id":"uuid"}
-
-編輯文件 metadata（標題、描述）：
-__action__:{"type":"edit_doc","doc_id":"uuid","title":"新標題","description":"描述"}
-
-## 限制
-- 只能操作文件管理頁面的功能
-- 不能執行其他頁面的操作
-- 刪除操作前必須先確認使用者意圖
-- **執行 edit_doc 前，必須先告知使用者：「我將要修改文件《{title}》的{欄位}，從「{舊值}」改為「{新值}」，請確認是否執行？」，收到確認（確認/好/是/ok）後才輸出 __action__**
-- **執行 batch_move_to_kb 或任何影響多個文件的操作前，必須先列出計畫（哪些文件移入哪個 KB）並請使用者回覆「確認」或「好」後才輸出 __action__**
-
-## 回應格式
-- 使用繁體中文
-- 回應簡潔，不超過 200 字
-- 執行操作前先說明要做什麼
-- 操作完成後必須回報結果摘要（成功幾個、失敗幾個）""",
-
-    "chat": """你是對話管理頁面的 AI 助理。
-
-## 可執行操作
-刪除對話：
-__action__:{"type":"delete_conv","conv_id":"uuid"}
-
-搜尋對話：
-__action__:{"type":"search_convs","query":"關鍵字"}
-
-## 限制
-- 只能操作對話管理頁面的功能
-- 刪除操作前必須先確認使用者意圖
-
-## 回應格式
-- 使用繁體中文
-- 回應簡潔，不超過 200 字""",
-
-    "ontology": """你是知識圖譜頁面的 AI 助理。
-
-## 可執行操作
-批次核准所有待審核實體：
-__action__:{"type":"batch_approve_all"}
-
-批次拒絕所有待審核實體：
-__action__:{"type":"batch_reject_all"}
-
-## 限制
-- 只能操作知識圖譜頁面的功能
-- 批次操作前必須明確確認使用者意圖
-- 批次拒絕會將實體加入封鎖清單，請謹慎執行
-
-## 回應格式
-- 使用繁體中文
-- 回應簡潔，不超過 200 字
-- 執行批次操作前先說明影響範圍""",
-
-    "plugins": """你是插件管理頁面的 AI 助理。
-
-## 可執行操作
-啟用或停用插件：
-__action__:{"type":"toggle_plugin","plugin_id":"uuid","enabled":true}
-
-## 限制
-- 只能操作插件管理頁面的功能
-- 修改插件狀態前先說明影響
-
-## 回應格式
-- 使用繁體中文
-- 回應簡潔，不超過 200 字""",
-
-    "settings": """你是系統設定頁面的 AI 助理。
-
-## 可執行操作
-新增模型：
-__action__:{"type":"add_model","name":"模型名稱","provider":"ollama"}
-
-## 限制
-- 只能操作系統設定頁面的功能
-- 修改系統設定前必須說明影響
-- 不能刪除現有模型
-
-## 回應格式
-- 使用繁體中文
-- 回應簡潔，不超過 200 字
-- 涉及技術參數時附上說明""",
-
-    "protein": """你是蛋白質圖譜頁面的 AI 助理。
-
-## 功能範圍
-- 解釋蛋白質相互作用圖譜的節點和邊
-- 查詢特定蛋白質的相關資訊
-- 協助分析蛋白質關係網絡
-
-## 限制
-- 只能回答蛋白質圖譜相關問題
-- 不執行操作，純問答模式
-
-## 回應格式
-- 使用繁體中文，專業術語附英文原文
-- 回應簡潔，不超過 300 字""",
-
-    "kb": """你是知識庫管理 AI 助理。
-
-## 可執行操作
-當使用者要求執行操作時，在回應末尾加上 __action__:{...}（單行 JSON）：
-
-搜尋相關文件：
-__action__:{"type":"search_docs","query":"關鍵字","top_k":20}
-
-列出所有知識庫（建議分類前先知道現有 KB）：
-__action__:{"type":"list_kbs"}
-
-列出所有文件（取得 doc_id 和 kb_id，執行移動操作前必須先呼叫）：
-__action__:{"type":"list_all_docs"}
-
-將文件移入知識庫（單一文件）：
-__action__:{"type":"move_to_kb","doc_id":"uuid","kb_id":"uuid"}
-
-批次將多篇文件移入同一知識庫：
-__action__:{"type":"batch_move_to_kb","doc_ids":["uuid1","uuid2"],"kb_id":"uuid"}
-
-建立知識庫：
-__action__:{"type":"create_kb","name":"KB名稱","description":"描述"}
-
-## 重要規則
-- **執行 move_to_kb 或 batch_move_to_kb 前，必須先呼叫 list_all_docs 取得正確的 doc_id 和 kb_id，不得猜測 ID**
-- **執行 batch_move_to_kb 或任何影響多個文件的操作前，必須先列出計畫（哪些文件移入哪個 KB）並請使用者回覆「確認」或「好」後才輸出 __action__**
-- 建立知識庫前先確認名稱和描述
-
-## 回應格式
-- 使用繁體中文
-- 回應簡潔，不超過 200 字
-- 執行操作前先說明要做什麼
-- 操作完成後必須回報結果摘要（成功幾個、失敗幾個）""",
-}
+# page_agent prompts 已搬移至 backend/prompts/page_agents.py（E6）
+# 透過 get_page_agent_prompt(page) 取用，含共用 footer 與危險操作規範
 
 
 async def _rag_stream(
@@ -337,6 +346,8 @@ async def _rag_stream(
     agent_type: str = "chat",
     file_context: str | None = None,
     mode: str = "agent",
+    user_id: str | None = None,
+    regenerated_from: str | None = None,
 ) -> AsyncIterator[str]:
     """核心 RAG pipeline：嵌入 → 搜索 → Rerank → 串流
 
@@ -500,11 +511,18 @@ async def _rag_stream(
         doc_id = hit.payload.get("doc_id", "")
         page   = hit.payload.get("page_number", "")
         title  = hit.payload.get("title", "")
+        chunk_id = hit.payload.get("chunk_id") or str(getattr(hit, "id", "") or "")
         if chars + len(text) <= _max_context_chars:
             context_parts.append(f"[{title} p.{page}] {text}")
             chars += len(text)
-            sources.append({"doc_id": doc_id, "title": title,
-                            "page_number": page, "score": hit.score})
+            sources.append({
+                "doc_id": doc_id,
+                "title": title,
+                "page_number": page,
+                "score": hit.score,
+                "chunk_id": chunk_id,
+                "content_preview": text[:200],
+            })
 
     context = "\n\n".join(context_parts)
     # 讀取知識庫 Schema（優點3：架構注入）
@@ -517,12 +535,26 @@ async def _rag_stream(
     _page_for_skill: str | None = None
     if agent_type and agent_type.startswith("page_agent:"):
         _page = agent_type.split(":", 1)[1]
-        _role = _PAGE_AGENT_PROMPTS.get(_page, "你是頁面助理。")
-        _agent_prefix = _role + "\n\n"
+        _agent_prefix = get_page_agent_prompt(_page) + "\n\n"
         _page_for_skill = _page
+    elif agent_type == "global_agent":
+        _agent_prefix = get_page_agent_prompt("global") + "\n\n"
+        _page_for_skill = "global"
     elif agent_type == "kb_agent":
-        _agent_prefix = _PAGE_AGENT_PROMPTS.get("kb", "你是知識庫助理。") + "\n\n"
+        _agent_prefix = get_page_agent_prompt("kb") + "\n\n"
         _page_for_skill = "kb"
+        # 若該 KB 有自訂 agent_prompt，優先採用
+        if conv_kb_scope_id:
+            try:
+                from sqlalchemy import text as _kbt
+                _kb_row = (await db.execute(
+                    _kbt("SELECT agent_prompt FROM knowledge_bases WHERE id = :kid"),
+                    {"kid": conv_kb_scope_id},
+                )).fetchone()
+                if _kb_row and _kb_row.agent_prompt and _kb_row.agent_prompt.strip():
+                    _agent_prefix = _kb_row.agent_prompt.strip() + "\n\n"
+            except Exception:
+                pass
 
     if _page_for_skill:
         # 從 DB 讀取使用者自訂 prompt
@@ -551,14 +583,35 @@ async def _rag_stream(
 
     system_prompt = (
         _agent_prefix
-        + "你是一個知識庫助理。請根據以下參考資料回答問題。"
-        "若資料不足以回答，請如實說明。"
-        f"{schema_section}"
+        + RAG_SYSTEM_PROMPT
+        + f"{schema_section}"
         f"{extra_section}"
         f"{_mode_suffix}"
         f"{file_context_section}\n\n"
         f"參考資料：\n{context}"
     )
+
+    # Phase D：prompt_template_auto_match 開啟時，取最佳模板注入 system prompt 結尾
+    _matched_template_id: str | None = None
+    if chat_cfg.get("prompt_template_auto_match"):
+        try:
+            from routers.prompt_engine import match_template as _match_template_fn, MatchRequest as _MatchRequest
+            _match_resp = await _match_template_fn(
+                _MatchRequest(intent=query, context={}),
+                current_user=None,
+                db=db,
+            )
+            if _match_resp and _match_resp.confidence >= 0.7:
+                _matched_template_id = _match_resp.matched_template_id
+                system_prompt += (
+                    f"\n\n【已自動套用模板：{_match_resp.title}】\n"
+                    f"{_match_resp.filled_prompt}"
+                )
+                logger.info("prompt_template auto-matched id=%s confidence=%.3f", _matched_template_id, _match_resp.confidence)
+        except HTTPException as _he:
+            logger.info("prompt_template auto-match no result: %s", _he.detail)
+        except Exception as _me:
+            logger.warning("prompt_template auto-match failed: %s", _me)
 
     # 5. 取先前對話紀錄（摘要 + 近期完整輪次）
     # 5a. 取總訊息數
@@ -583,6 +636,10 @@ async def _rag_stream(
         .limit(RECENT_ROUNDS * 2)
     )
     recent_msgs = list(reversed(recent_result.scalars().all()))
+
+    # 重生成：排除指定的舊 assistant 訊息，避免它出現在 history 中
+    if regenerated_from:
+        recent_msgs = [m for m in recent_msgs if m.id != regenerated_from]
 
     # 5d. 超過門檻且尚無摘要時，對更舊的訊息做摘要
     if total_msg_count > SUMMARIZE_THRESHOLD and not existing_summary:
@@ -611,81 +668,174 @@ async def _rag_stream(
         messages_payload.append({"role": m.role, "content": m.content})
     messages_payload.append({"role": "user", "content": query})
 
-    # 6. 儲存使用者訊息
-    user_msg = Message(
-        id=str(uuid.uuid4()),
-        conv_id=conv_id,
-        role="user",
-        content=query,
-        sources=[],
-    )
-    db.add(user_msg)
-    await db.commit()
+    # 6. 儲存使用者訊息（重生成模式跳過，避免重覆）
+    if not regenerated_from:
+        user_msg = Message(
+            id=str(uuid.uuid4()),
+            conv_id=conv_id,
+            role="user",
+            content=query,
+            sources=[],
+        )
+        db.add(user_msg)
+        await db.commit()
 
     # 7. 串流 LLM（統一適配層：Ollama / OpenAI / Groq / Gemini / OpenRouter / Anthropic）
     from llm_client import llm_stream
     from routers.settings_router import get_llm_runtime_config
+    from services.llm_resolver import resolve_model_runtime, apply_model_runtime
+    from services.llm_metrics import track_llm_call
     runtime_config = await get_llm_runtime_config(db)
 
-    # 根據模型名稱自動判斷 provider，覆寫 runtime_config 中的 provider
+    # 依第一原則（first-principles-api-key §三）：以 model_name 解析 model-level 設定
+    # provider 由 model 名稱自動推測；model-level 的 api_key / base_url / provider 覆寫 system_settings fallback
     if model:
-        _m = model.lower()
-        if "claude" in _m:
-            runtime_config = {**runtime_config, "provider": "anthropic"}
-        elif "gpt" in _m or _m.startswith("o1") or _m.startswith("o3"):
-            runtime_config = {**runtime_config, "provider": "openai"}
-        elif "gemini" in _m:
-            runtime_config = {**runtime_config, "provider": "gemini"}
+        try:
+            _mr = await resolve_model_runtime(db, model, fallback_provider=runtime_config.get("provider"))
+            runtime_config = apply_model_runtime(runtime_config, _mr)
+        except ValueError as _ve:
+            logger.error("resolve_model_runtime strict reject: %s", _ve)
+            err_text = f"模型設定錯誤：{_ve}"
+            db.add(Message(
+                id=str(uuid.uuid4()), conv_id=conv_id, role="assistant",
+                content=err_text, sources=[],
+            ))
+            await db.commit()
+            yield "data: " + json.dumps({"type": "error", "text": err_text}) + "\n\n"
+            yield "data: [DONE]\n\n"
+            return
 
-        # 從 llm_models 查詢 model-level api_key（優先於 system_settings fallback）
-        _detected_provider = runtime_config.get("provider")
-        if _detected_provider and _detected_provider != "ollama":
-            from sqlalchemy import text as _sql_text
-            from utils.crypto import decrypt_secret as _decrypt
-            _mdl_row = await db.execute(
-                _sql_text("SELECT api_key FROM llm_models WHERE name=:n AND provider=:p LIMIT 1"),
-                {"n": model, "p": _detected_provider},
-            )
-            _mr = _mdl_row.fetchone()
-            if _mr and _mr[0]:
-                try:
-                    runtime_config = {**runtime_config, "api_key": _decrypt(_mr[0])}
-                except Exception:
-                    pass
+    _eff_provider = runtime_config.get("provider") or settings.LLM_PROVIDER
+    _eff_model = model or runtime_config.get("model") or "unknown"
+
+    # 7. 串流 LLM（統一適配層）
+    # 改善三：若 provider 支援 function calling 且頁面有工具定義，使用 llm_with_tools（非串流）
+    from llm_client import llm_with_tools, FC_PROVIDERS
+    from prompts.page_agents import get_tools_for_page as _get_tools
+
+    _use_fc = (
+        _eff_provider in FC_PROVIDERS
+        and bool(_page_for_skill)
+        and mode == "agent"
+        and bool(_get_tools(_page_for_skill))
+    )
 
     full_reply = ""
-    try:
-        async for token in llm_stream(
-            messages_payload, settings,
-            model_override=model,
-            config_override=runtime_config,
-            temperature=_temperature,
-            max_tokens=_max_tokens,
-        ):
-            full_reply += token
-            yield "data: " + json.dumps({"type": "token", "text": token}) + "\n\n"
-    except httpx.HTTPStatusError as e:
-        logger.error("LLM stream error: %s", e)
-        err_text = "LLM 服務暫時無法使用"
-        db.add(Message(
-            id=str(uuid.uuid4()), conv_id=conv_id, role="assistant",
-            content=err_text, sources=[],
-        ))
-        await db.commit()
-        yield "data: " + json.dumps({"type": "error", "text": err_text}) + "\n\n"
-        yield "data: [DONE]\n\n"
-        return
-    except Exception as e:
-        logger.error("LLM unexpected error: %s", e)
-        err_text = f"發生錯誤：{e}"
-        db.add(Message(
-            id=str(uuid.uuid4()), conv_id=conv_id, role="assistant",
-            content=err_text, sources=[],
-        ))
-        await db.commit()
-        yield "data: " + json.dumps({"type": "error", "text": str(e)}) + "\n\n"
-        yield "data: [DONE]\n\n"
-        return
+    _fc_tool_calls: list[dict] = []  # populated when FC path is used
+
+    if _use_fc:
+        # FC 路徑：非串流呼叫，取得 text + tool_calls
+        _tools = _get_tools(_page_for_skill)
+        try:
+            async with track_llm_call(
+                model=_eff_model, provider=_eff_provider, call_type="chat",
+                user_id=user_id, conv_id=conv_id,
+                template_id=_matched_template_id,
+            ) as _on_usage:
+                _fc_result = await llm_with_tools(
+                    messages_payload, _tools, settings,
+                    model_override=model,
+                    config_override=runtime_config,
+                    max_tokens=_max_tokens,
+                )
+            fc_text = _fc_result.get("text", "")
+            _fc_tool_calls = _fc_result.get("tool_calls", [])
+            # 若 FC 無 tool_calls 也無 text（provider 不支援），fallback 到文字路徑
+            if not fc_text and not _fc_tool_calls:
+                _use_fc = False
+            else:
+                full_reply = fc_text
+                # 模擬串流：逐詞 yield text tokens
+                if fc_text:
+                    _words = fc_text.split(" ")
+                    for _i, _w in enumerate(_words):
+                        _tok = (_w + " ") if _i < len(_words) - 1 else _w
+                        yield "data: " + json.dumps({"type": "token", "text": _tok}) + "\n\n"
+        except Exception as _fce:
+            logger.warning("llm_with_tools failed, fallback to llm_stream: %s", _fce)
+            _use_fc = False
+            full_reply = ""
+            _fc_tool_calls = []
+
+    if not _use_fc:
+        # 文字串流路徑（原有邏輯）
+        try:
+            async with track_llm_call(
+                model=_eff_model, provider=_eff_provider, call_type="chat",
+                user_id=user_id, conv_id=conv_id,
+                template_id=_matched_template_id,
+            ) as _on_usage:
+                async for token in llm_stream(
+                    messages_payload, settings,
+                    model_override=model,
+                    config_override=runtime_config,
+                    temperature=_temperature,
+                    max_tokens=_max_tokens,
+                    usage_callback=_on_usage,
+                ):
+                    full_reply += token
+                    yield "data: " + json.dumps({"type": "token", "text": token}) + "\n\n"
+        except httpx.HTTPStatusError as e:
+            logger.error("LLM stream error: %s", e)
+            _status = getattr(getattr(e, "response", None), "status_code", "?")
+            _resp_preview = ""
+            try:
+                _resp_preview = (e.response.text or "")[:120].replace("\n", " ")
+            except Exception:
+                pass
+            err_text = (
+                f"LLM 服務錯誤（{_eff_provider} HTTP {_status}）：{_resp_preview}"
+                if _resp_preview
+                else f"LLM 服務錯誤（{_eff_provider} HTTP {_status}）"
+            )
+            db.add(Message(
+                id=str(uuid.uuid4()), conv_id=conv_id, role="assistant",
+                content=err_text, sources=[],
+            ))
+            await db.commit()
+            yield "data: " + json.dumps({"type": "error", "text": err_text}) + "\n\n"
+            yield "data: [DONE]\n\n"
+            return
+        except Exception as e:
+            logger.error("LLM unexpected error: %s", e)
+            err_text = f"發生錯誤：{e}"
+            db.add(Message(
+                id=str(uuid.uuid4()), conv_id=conv_id, role="assistant",
+                content=err_text, sources=[],
+            ))
+            await db.commit()
+            yield "data: " + json.dumps({"type": "error", "text": str(e)}) + "\n\n"
+            yield "data: [DONE]\n\n"
+            return
+
+    # 7b. 改善二：後端執行 action（FC tool_calls 或文字 __action__ 解析）
+    # FC 路徑：執行 tool_calls
+    for _tc in _fc_tool_calls:
+        _tc_action = {"type": _tc.get("name", ""), **(_tc.get("arguments") or {})}
+        if _tc_action.get("type") in _BACKEND_WRITE_TYPES:
+            _tc_res, _tc_dispatch = await _execute_action_backend(_tc_action, db)
+            yield "data: " + json.dumps({
+                "type": "action_result",
+                "action_type": _tc_action.get("type"),
+                "result": _tc_res,
+                "dispatch": _tc_dispatch,
+            }, ensure_ascii=False) + "\n\n"
+
+    # 文字路徑：解析 __action__:{} 並執行寫入操作
+    if not _use_fc:
+        for _am in _ACTION_RE_BACKEND.finditer(full_reply):
+            try:
+                _act = json.loads(_am.group(1))
+            except Exception:
+                continue
+            if _act.get("type") in _BACKEND_WRITE_TYPES:
+                _ar, _ad = await _execute_action_backend(_act, db)
+                yield "data: " + json.dumps({
+                    "type": "action_result",
+                    "action_type": _act.get("type"),
+                    "result": _ar,
+                    "dispatch": _ad,
+                }, ensure_ascii=False) + "\n\n"
 
     # 8. 儲存助理回覆
     assistant_msg = Message(
@@ -694,6 +844,7 @@ async def _rag_stream(
         role="assistant",
         content=full_reply,
         sources=sources,
+        regenerated_from=regenerated_from,
     )
     db.add(assistant_msg)
     await db.commit()
@@ -701,24 +852,141 @@ async def _rag_stream(
     # 9. 傳送 sources 事件
     yield "data: " + json.dumps({"type": "sources", "sources": sources}) + "\n\n"
 
+    # 9a. E7：若涉及文件有 ingestion_warnings，發送 system_notice 提示前端
+    try:
+        _doc_ids = [s.get("doc_id") for s in sources if s.get("doc_id")]
+        if _doc_ids:
+            _seen = set()
+            _unique_ids = [d for d in _doc_ids if not (d in _seen or _seen.add(d))]
+            _wrow = await db.execute(
+                sa_text("SELECT id, ingestion_warnings FROM documents WHERE id = ANY(:ids) AND jsonb_array_length(COALESCE(ingestion_warnings,'[]'::jsonb)) > 0"),
+                {"ids": _unique_ids},
+            )
+            _warn_docs = _wrow.fetchall()
+            if _warn_docs:
+                from prompts import EMBEDDING_FALLBACK_NOTICE
+                yield "data: " + json.dumps({
+                    "type": "system_notice",
+                    "level": "warning",
+                    "message": EMBEDDING_FALLBACK_NOTICE,
+                    "affected_doc_ids": [str(r[0]) for r in _warn_docs],
+                }, ensure_ascii=False) + "\n\n"
+    except Exception as _we:
+        logger.warning("system_notice for ingestion_warnings failed: %s", _we)
+
+    # 9b. C2 Chat Reflection（system_settings.chat_reflection_enabled 開啟時）
+    try:
+        _ref_row = (await db.execute(
+            sa_text("SELECT value FROM system_settings WHERE key='chat_reflection_enabled'")
+        )).first()
+        _ref_on = bool(_ref_row and str(_ref_row[0]).strip().lower() in ("1", "true", "on", "yes"))
+    except Exception:
+        _ref_on = False
+
+    if _ref_on and full_reply.strip() and context.strip():
+        try:
+            judge_prompt = REFLECTION_JUDGE_PROMPT(query, context, full_reply)
+            judge_messages = [{"role": "user", "content": judge_prompt}]
+            judge_text = ""
+            async with track_llm_call(
+                model=_eff_model, provider=_eff_provider, call_type="reflection",
+                user_id=user_id, conv_id=conv_id,
+            ) as _on_judge_usage:
+                async for tk in llm_stream(
+                    judge_messages, settings,
+                    model_override=model,
+                    config_override=runtime_config,
+                    temperature=0.0,
+                    max_tokens=400,
+                    usage_callback=_on_judge_usage,
+                ):
+                    judge_text += tk
+            # 嘗試從回覆內擷取 JSON
+            _jt = judge_text.strip()
+            if "```" in _jt:
+                _jt = _jt.split("```")[1]
+                if _jt.startswith("json"):
+                    _jt = _jt[4:]
+            _jt = _jt.strip()
+            try:
+                judge_obj = json.loads(_jt)
+            except Exception:
+                judge_obj = None
+            if isinstance(judge_obj, dict):
+                _scores = judge_obj.get("scores") or {}
+                _total = judge_obj.get("total")
+                if not isinstance(_total, int):
+                    try:
+                        _total = sum(int(v) for v in _scores.values()) if _scores else 0
+                    except Exception:
+                        _total = 0
+                _should_regen = bool(judge_obj.get("should_regenerate"))
+                _regen_hint = (judge_obj.get("regenerate_hint") or "").strip()
+                yield "data: " + json.dumps({
+                    "type": "reflection",
+                    "scores": _scores,
+                    "total": _total,
+                    "verdict": judge_obj.get("verdict", ""),
+                    "should_regenerate": _should_regen,
+                }, ensure_ascii=False) + "\n\n"
+
+                # 不足門檻且裁議 should_regenerate → 以 hint 重生一次
+                if _should_regen and (_total or 0) < REFLECTION_TOTAL_THRESHOLD and _regen_hint:
+                    regen_messages = list(messages_payload)
+                    # 以 system 附加提示，保留原始上下文
+                    regen_messages.append({
+                        "role": "system",
+                        "content": f"以下是審查嘴意見，請重新回答並修正不足：{_regen_hint}",
+                    })
+                    regen_full = ""
+                    async with track_llm_call(
+                        model=_eff_model, provider=_eff_provider, call_type="chat_regen",
+                        user_id=user_id, conv_id=conv_id,
+                    ) as _on_regen_usage:
+                        async for tk in llm_stream(
+                            regen_messages, settings,
+                            model_override=model,
+                            config_override=runtime_config,
+                            temperature=_temperature,
+                            max_tokens=_max_tokens,
+                            usage_callback=_on_regen_usage,
+                        ):
+                            regen_full += tk
+                            yield "data: " + json.dumps({"type": "regen_token", "text": tk}) + "\n\n"
+                    if regen_full.strip():
+                        # 更新原 assistant 訊息為重生版（保留原本於 content 以 ===REGEN=== 區隔以供查看）
+                        merged = full_reply + "\n\n---\n【反思重生】\n" + regen_full
+                        await db.execute(
+                            sa_update(Message)
+                            .where(Message.id == assistant_msg.id)
+                            .values(content=merged)
+                        )
+                        await db.commit()
+                        full_reply = merged
+                        yield "data: " + json.dumps({"type": "regen_done"}) + "\n\n"
+        except Exception as _re:
+            logger.warning("Chat reflection failed: %s", _re)
+
     # 10. 自動命名（conv_title == "新對話" 時觸發）
     if conv_title == "新對話":
         try:
             title_messages = [
-                {"role": "user", "content": (
-                    f"根據以下對話的第一則使用者訊息，用繁體中文生成一個 8 到 15 字的對話標題。"
-                    f"只回傳標題文字，不要加引號、符號或任何說明。\n\n使用者訊息：{query}"
-                )}
+                {"role": "user", "content": TITLE_GEN_PROMPT(query)}
             ]
             new_title = ""
-            async for token in llm_stream(
-                title_messages, settings,
-                model_override=model,
-                config_override=runtime_config,
-                temperature=0.3,
-                max_tokens=30,
-            ):
-                new_title += token
+            async with track_llm_call(
+                model=_eff_model, provider=_eff_provider, call_type="title",
+                user_id=user_id, conv_id=conv_id,
+            ) as _on_title_usage:
+                async for token in llm_stream(
+                    title_messages, settings,
+                    model_override=model,
+                    config_override=runtime_config,
+                    temperature=0.3,
+                    max_tokens=30,
+                    usage_callback=_on_title_usage,
+                ):
+                    new_title += token
             new_title = new_title.strip().strip('"\'「\u300d『\u300f').strip()[:100]
             if new_title:
                 await db.execute(
@@ -735,6 +1003,51 @@ async def _rag_stream(
 
 
 # ── 端點 ──────────────────────────────────────────────────────
+
+@router.post("/rag-search")
+async def rag_search(
+    req: ChatRequest,
+    current_user: CurrentUser = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """純 RAG 檢索端點：嵌入 query 後從 Qdrant 取 top-k chunks，僅回傳 sources（不呼叫 LLM）。
+    給 MCP rag_search tool 使用。"""
+    from config import settings as _settings
+
+    if not req.query.strip():
+        raise HTTPException(status_code=400, detail="query 不能為空")
+
+    top_k = 8
+    qdrant_filter = None
+    kb_id = req.kb_scope_id
+    doc_ids = req.doc_ids
+    if doc_ids:
+        qdrant_filter = Filter(must=[FieldCondition(key="doc_id", match=MatchAny(any=doc_ids))])
+    elif kb_id:
+        qdrant_filter = Filter(must=[FieldCondition(key="kb_id", match=MatchValue(value=kb_id))])
+
+    query_vec = await _embed_query(req.query, _settings)
+    qdrant = get_qdrant_client()
+    res = await qdrant.query_points(
+        collection_name=_settings.QDRANT_COLLECTION,
+        query=query_vec,
+        limit=top_k,
+        with_payload=True,
+        query_filter=qdrant_filter,
+    )
+    sources = []
+    for hit in res.points:
+        payload = hit.payload or {}
+        sources.append({
+            "chunk_id":        payload.get("chunk_id") or str(getattr(hit, "id", "") or ""),
+            "doc_id":          payload.get("doc_id", ""),
+            "title":           payload.get("title", ""),
+            "page_number":     payload.get("page_number"),
+            "score":           hit.score,
+            "content_preview": (payload.get("content") or "")[:400],
+        })
+    return {"query": req.query, "results": sources}
+
 
 @router.post("/stream")
 async def chat_stream(
@@ -802,6 +1115,7 @@ async def chat_stream(
             conv_title=_conv_title,
             agent_type=_agent_type,
             mode=req.mode or "agent",
+            user_id=current_user.id if current_user else None,
         ),
         media_type="text/event-stream",
         headers={
@@ -850,27 +1164,24 @@ async def chat_stream_with_file(
     _doc_scope_ids = _parse_list(doc_scope_ids)
     _tag_scope_ids = _parse_list(tag_scope_ids)
 
-    # 分析附件，建立 file_context
+    # 分析附件，建立 file_context（先組基本內容，第一輪 priming 在 conv 解析後加）
     file_context: Optional[str] = None
+    _file_priming: Optional[str] = None  # 僅第一輪注入的「先詢問意圖」提示
     if file and file.filename:
         ext = os.path.splitext(file.filename)[1].lower()
         fname = file.filename
         if ext in _EXCEL_EXTENSIONS:
-            file_context = (
-                f"【使用者上傳了一份 Excel/CSV 檔案：{fname}】\n"
-                "請先詢問使用者的意圖：是要匯入連結清單、進行資料分析、還是其他用途？"
-                "不要直接執行任何操作，等待使用者確認。\n"
+            file_context = f"【使用者本次附上檔案：{fname}（Excel/CSV）】"
+            _file_priming = (
+                "在進行任何操作之前，請先確認使用者的意圖：是要匯入連結清單、進行資料分析、還是其他用途？\n"
                 "若使用者明確說要「匯入」或「匯入連結」，請在回應中加入以下 JSON 標記（獨立一行）：\n"
                 '{"__action__": "import_excel"}'
             )
         elif ext in _DOC_EXTENSIONS:
-            file_context = (
-                f"【使用者上傳了一份文件：{fname}】\n"
-                "請先詢問使用者：是要將此文件加入知識庫，還是只想讓你閱讀並回答問題？"
-                "不要直接執行任何操作，等待使用者確認。"
-            )
+            file_context = f"【使用者本次附上檔案：{fname}】"
+            _file_priming = "在進行任何操作之前，請先詢問使用者：是要將此文件加入知識庫，還是只想讓你閱讀並回答問題？"
         else:
-            file_context = f"【使用者上傳了一個檔案：{fname}，格式暫不支援自動處理】"
+            file_context = f"【使用者本次附上檔案：{fname}，格式暫不支援自動處理】"
 
     llm_model = model or None
 
@@ -907,6 +1218,17 @@ async def chat_stream_with_file(
         _conv_title = first_words
 
     _agent_type = agent_type or "chat"
+    # 第一輪才注入 file priming（詢問意圖）；之後使用者已表態則只保留檔案名稱
+    if file_context and _file_priming:
+        try:
+            _msg_count_res = await db.execute(
+                select(func.count(Message.id)).where(Message.conv_id == conv_id)
+            )
+            _msg_count = _msg_count_res.scalar() or 0
+        except Exception:
+            _msg_count = 0
+        if _msg_count == 0:
+            file_context = file_context + "\n" + _file_priming
     # 空 query 時以檔名作為 embedding 依據，讓 RAG 仍可運作
     _effective_query = query.strip() or (
         f"請分析這份附件：{file.filename}" if file and file.filename else "你好"
@@ -923,6 +1245,7 @@ async def chat_stream_with_file(
             agent_type=_agent_type,
             file_context=file_context,
             mode=mode or "agent",
+            user_id=current_user.id if current_user else None,
         ):
             # 檢查 __action__ 標記，轉換為 SSE action 事件
             if '__action__": "import_excel"' in chunk:
@@ -933,6 +1256,65 @@ async def chat_stream_with_file(
 
     return StreamingResponse(
         _stream_wrapper(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "X-Conversation-Id": conv_id,
+        },
+    )
+
+
+# ── C1：訊息重生成 ──────────────────────────────────────────────
+
+@router.post("/conversations/{conv_id}/messages/{msg_id}/regenerate")
+async def regenerate_message(
+    conv_id: str,
+    msg_id: str,
+    model: Optional[str] = None,
+    current_user: CurrentUser = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """重新生成指定 assistant 訊息：以前一則 user 訊息為輸入，重跑 RAG。
+    新訊息的 regenerated_from 指向 msg_id，前端可據此呈現分支關係。
+    """
+    from config import settings
+    # 1. 驗證對話與訊息
+    conv_r = await db.execute(select(Conversation).where(Conversation.id == conv_id))
+    conv = conv_r.scalar_one_or_none()
+    if conv is None:
+        raise HTTPException(status_code=404, detail="對話不存在")
+
+    msg_r = await db.execute(select(Message).where(Message.id == msg_id, Message.conv_id == conv_id))
+    target = msg_r.scalar_one_or_none()
+    if target is None:
+        raise HTTPException(status_code=404, detail="訊息不存在")
+    if target.role != "assistant":
+        raise HTTPException(status_code=400, detail="只能重新生成 AI 回覆")
+
+    # 2. 取得緊鄰前一則 user 訊息
+    prev_r = await db.execute(
+        select(Message)
+        .where(Message.conv_id == conv_id, Message.role == "user", Message.created_at <= target.created_at)
+        .order_by(Message.created_at.desc())
+        .limit(1)
+    )
+    prev_user = prev_r.scalar_one_or_none()
+    if prev_user is None:
+        raise HTTPException(status_code=400, detail="找不到對應的使用者訊息")
+
+    return StreamingResponse(
+        _rag_stream(
+            prev_user.content, conv_id, model, settings, db,
+            conv_doc_scope_ids=conv.doc_scope_ids or None,
+            conv_kb_scope_id=conv.kb_scope_id,
+            conv_tag_scope_ids=conv.tag_scope_ids or None,
+            conv_title=conv.title or "",
+            agent_type=conv.agent_type or "chat",
+            mode="agent",
+            user_id=current_user.id if current_user else None,
+            regenerated_from=msg_id,
+        ),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -983,6 +1365,24 @@ async def create_conversation(
     )
 
 
+# ── 改善二：後端直接執行 action 端點 ─────────────────────────
+
+class ExecuteActionIn(BaseModel):
+    action_type: str
+    params: dict = {}
+
+
+@router.post("/execute-action")
+async def execute_action_endpoint(
+    req: ExecuteActionIn,
+    current_user: CurrentUser,
+    db: AsyncSession = Depends(get_db),
+):
+    action = {"type": req.action_type, **req.params}
+    result, dispatch = await _execute_action_backend(action, db)
+    return {"result": result, "dispatch": dispatch}
+
+
 @router.get("/conversations", response_model=list[ConversationOut])
 async def list_conversations(
     limit: int = Query(default=20, le=100),
@@ -1028,7 +1428,9 @@ async def get_conversation_messages(
     return [MessageOut(
         id=m.id, role=m.role, content=m.content,
         sources=m.sources or [],
-        created_at=m.created_at.isoformat()) for m in msgs]
+        created_at=m.created_at.isoformat(),
+        regenerated_from=getattr(m, "regenerated_from", None),
+    ) for m in msgs]
 
 
 @router.delete("/conversations/{conv_id}", status_code=status.HTTP_204_NO_CONTENT)

@@ -330,19 +330,48 @@ def _embed_texts_openai(texts: List[str], model: str, base_url: str, api_key: st
     return out
 
 
-def _embed_dispatch(texts: List[str], kb_cfg: dict) -> List[List[float]]:
-    """依 KB 設定路由到 ollama 或雲端 embedding；無 KB 設定則 fallback 全域 ollama"""
+def _embed_dispatch(texts: List[str], kb_cfg: dict, doc_id: str | None = None) -> List[List[float]]:
+    """依 KB 設定路由到 ollama 或雲端 embedding；C4：雲端失敗 → fallback ollama bge-m3 並寫入 documents.ingestion_warnings"""
     s = _settings()
     provider = (kb_cfg.get("embedding_provider") or "").lower()
     model    = kb_cfg.get("embedding_model")
+
+    def _record_warning(reason: str):
+        if not doc_id:
+            return
+        try:
+            from prompts import EMBEDDING_FALLBACK_NOTICE
+            with _pg_conn() as pg, pg.cursor() as cur:
+                cur.execute(
+                    "UPDATE documents SET ingestion_warnings = COALESCE(ingestion_warnings,'[]'::jsonb) || %s::jsonb "
+                    "WHERE id=%s",
+                    (json.dumps([{
+                        "type": "embedding_fallback",
+                        "reason": reason,
+                        "notice": EMBEDDING_FALLBACK_NOTICE,
+                    }], ensure_ascii=False), doc_id),
+                )
+                pg.commit()
+        except Exception as _we:
+            logger.warning("Failed to record ingestion_warning: %s", _we)
 
     if model and provider and provider != "ollama":
         base_url = kb_cfg.get("embedding_base_url") or "https://api.openai.com"
         api_key  = kb_cfg.get("embedding_api_key") or ""
         if not api_key:
             logger.warning("KB embedding api_key missing for provider=%s, fallback to ollama", provider)
+            _record_warning(f"雲端 provider={provider} 未設定 api_key")
         else:
-            return _embed_texts_openai(texts, model, base_url, api_key)
+            try:
+                vecs = _embed_texts_openai(texts, model, base_url, api_key)
+                # 檢查是否全部為空向量（表示全部失敗）
+                if vecs and any(v for v in vecs):
+                    return vecs
+                logger.warning("Cloud embedding returned all-empty vectors, falling back to ollama")
+                _record_warning(f"雲端 provider={provider} model={model} 回傳空向量")
+            except Exception as _ee:
+                logger.error("Cloud embedding failed (%s), falling back to ollama bge-m3: %s", provider, _ee)
+                _record_warning(f"雲端 provider={provider} model={model} 失敗：{_ee}")
 
     # ollama 分支：使用 KB 指定 model 或全域 fallback
     use_model = model if (model and (not provider or provider == "ollama")) else s.OLLAMA_EMBED_MODEL
@@ -700,7 +729,7 @@ def ingest_document(self, doc_id: str):
         return
 
     # 5. 嵌入（依 KB 設定路由 ollama / 雲端）
-    vectors   = _embed_dispatch([c["content"] for c in raw_chunks], _kb_cfg)
+    vectors   = _embed_dispatch([c["content"] for c in raw_chunks], _kb_cfg, doc_id=doc_id)
     chunk_ids = [str(uuid.uuid4()) for _ in raw_chunks]
 
     # 6-9. Saga 三庫寫入
@@ -724,9 +753,10 @@ def ingest_document(self, doc_id: str):
                     "title":       title,
                     "kb_id":       knowledge_base_id,
                     "source_url":  source_url,
+                    "chunk_id":    cid,
                 },
             )
-            for qid, vec, c in zip(qdrant_ids, vectors, raw_chunks)
+            for qid, vec, c, cid in zip(qdrant_ids, vectors, raw_chunks, chunk_ids)
         ]
         qdrant.upsert(collection_name=s.QDRANT_COLLECTION, points=points)
         saga.record_step("qdrant")

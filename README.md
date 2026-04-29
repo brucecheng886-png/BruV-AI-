@@ -4,6 +4,23 @@
 
 ---
 
+## 安裝程式（推薦）
+
+1. 下載 [BruV AI Setup 1.0.0.exe](https://github.com/brucecheng886-png/BruV-AI-/releases)
+2. 執行安裝程式，選擇安裝路徑
+3. 開啟 BruV AI，依照設定精靈完成初始設定
+4. 設定精靈會自動引導安裝 Docker Desktop、Ollama 和下載必要模型
+
+系統需求：
+- Windows 10/11（64-bit）
+- 記憶體：16GB+（建議）
+- 硬碟：30GB+ 可用空間（Docker images + Ollama 模型）
+- 網路：首次啟動需下載約 15GB 資料
+
+注意：設定精靈完成後，每次開啟 APP 會自動啟動後台服務（Docker 容器），關閉時可選擇同時停止服務。
+
+---
+
 ## 快速開始
 
 ### 前置需求

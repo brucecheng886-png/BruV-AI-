@@ -6,8 +6,8 @@ from datetime import datetime
 from typing import Any
 
 from sqlalchemy import (
-    Boolean, DateTime, Float, ForeignKey,
-    Integer, String, Text, func,
+    BigInteger, Boolean, DateTime, Float, ForeignKey,
+    Integer, Numeric, String, Text, func,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID, ARRAY
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -44,6 +44,7 @@ class KnowledgeBase(Base):
     language: Mapped[str | None] = mapped_column(String, nullable=True, default="auto")
     rerank_enabled: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=None)
     default_top_k: Mapped[int | None] = mapped_column(Integer, nullable=True, default=None)
+    agent_prompt: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
     created_by: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
@@ -118,6 +119,7 @@ class Document(Base):
     suggested_kb_name: Mapped[str | None] = mapped_column(Text, nullable=True)
     suggested_tags: Mapped[list] = mapped_column(JSONB, default=list)
     cover_image_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ingestion_warnings: Mapped[list] = mapped_column(JSONB, default=list)
     created_by: Mapped[str | None] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
@@ -177,6 +179,7 @@ class Message(Base):
     role: Mapped[str] = mapped_column(String, nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     sources: Mapped[list] = mapped_column(JSONB, default=list)
+    regenerated_from: Mapped[str | None] = mapped_column(UUID(as_uuid=False), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     conversation: Mapped["Conversation"] = relationship("Conversation", back_populates="messages", foreign_keys="Message.conv_id")
@@ -223,8 +226,34 @@ class LLMModel(Base):
     provider: Mapped[str | None] = mapped_column(String(30))
     base_url: Mapped[str | None] = mapped_column(String(256))
     api_key:  Mapped[str | None] = mapped_column(Text)            # Fernet 加密後的 API Key
+    # 治理欄位（Phase A2）
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    monthly_quota_usd: Mapped[float | None] = mapped_column(Numeric(10, 2), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class LLMUsageLog(Base):
+    """Phase B1: LLM 呼叫使用量日誌"""
+    __tablename__ = "llm_usage_log"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    conv_id: Mapped[str | None] = mapped_column(UUID(as_uuid=False), nullable=True)
+    agent_task_id: Mapped[str | None] = mapped_column(UUID(as_uuid=False), nullable=True)
+    user_id: Mapped[str | None] = mapped_column(UUID(as_uuid=False), nullable=True)
+    model_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    call_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    prompt_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    completion_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    total_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    latency_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    cost_usd: Mapped[float | None] = mapped_column(Numeric(12, 6), nullable=True)
+    success: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    template_id: Mapped[str | None] = mapped_column(UUID(as_uuid=False), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class OntologyReviewQueue(Base):

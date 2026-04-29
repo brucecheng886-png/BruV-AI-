@@ -52,6 +52,11 @@
     <!-- ── Main ──────────────────────────────────────────────── -->
     <div class="chat-main">
 
+      <!-- 隱藏檔案選擇器（home 與 active 狀態共用，避免 v-if 切換後 ref 變 null）-->
+      <input ref="fileInputRef" type="file" style="display:none"
+        accept=".xlsx,.pdf,.txt,.docx,.md,.csv"
+        @change="onFileSelected" />
+
       <!-- Home state -->
       <div v-if="messages.length === 0" class="chat-home">
         <div class="home-greeting">
@@ -61,10 +66,6 @@
 
         <div class="home-input-wrap">
           <div class="input-box-card">
-            <!-- 隱藏檔案選擇器 -->
-            <input ref="fileInputRef" type="file" style="display:none"
-              accept=".xlsx,.pdf,.txt,.docx,.md,.csv"
-              @change="onFileSelected" />
             <div v-if="attachedDocs.length" class="attached-docs">
               <el-tag v-for="doc in attachedDocs" :key="doc.id" closable size="small" type="info" @close="removeDoc(doc.id)">
                 📄 {{ doc.filename }}
@@ -88,6 +89,23 @@
               <div v-for="doc in mentionMenu.docs" :key="doc.id" class="cmd-item" @mousedown.prevent="applyMention(doc)">
                 <span class="cmd-icon">📄</span>
                 <span class="cmd-name">{{ doc.filename }}</span>
+              </div>
+            </div>
+            <div v-if="agentMenu.show" class="cmd-menu">
+              <div class="cmd-item" @mousedown.prevent="applyAgentMode('agent')">
+                <span class="cmd-icon">🤖</span>
+                <span class="cmd-name">@agent</span>
+                <span class="cmd-desc">執行操作模式</span>
+              </div>
+              <div class="cmd-item" @mousedown.prevent="applyAgentMode('ask')">
+                <span class="cmd-icon">💬</span>
+                <span class="cmd-name">@ask</span>
+                <span class="cmd-desc">純問答模式</span>
+              </div>
+              <div class="cmd-item" @mousedown.prevent="applyAgentMode('plan')">
+                <span class="cmd-icon">📋</span>
+                <span class="cmd-name">@plan</span>
+                <span class="cmd-desc">規劃後確認模式</span>
               </div>
             </div>
             <el-input
@@ -211,7 +229,8 @@
               </div>
               <div v-if="!msg.streaming" class="msg-actions ai-actions">
                 <button @click="copyText(msg.content)" title="複製"><Copy :size="14" :stroke-width="1.5" /></button>
-                <button @click="retryFrom(idx)" title="重試"><RotateCcw :size="14" :stroke-width="1.5" /></button>
+                <button @click="retryFrom(idx)" title="重試（重送同一問題）"><RotateCcw :size="14" :stroke-width="1.5" /></button>
+                <button v-if="msg.id" @click="regenerateMessage(msg, idx)" title="重生（保留原回覆為分枝）">↻</button>
                 <button
                   v-if="msg.id"
                   @click="saveToKb(msg)"
@@ -221,11 +240,22 @@
               </div>
             </div>
 
+            <!-- System Notice (E7：embedding fallback / 系統警告) -->
+            <div v-if="msg.systemNotice" class="system-notice" :class="`system-notice--${msg.systemNotice.level}`">
+              ⚠️ {{ msg.systemNotice.message }}
+            </div>
+
             <!-- Sources -->
             <div v-if="msg.sources && msg.sources.length" class="sources-wrap">
-              <div v-for="(src, si) in msg.sources" :key="si" class="source-card">
+              <div
+                v-for="(src, si) in msg.sources"
+                :key="si"
+                class="source-card"
+                :class="{ 'source-card--clickable': !!src.chunk_id }"
+                @click="src.chunk_id && openChunkModal(src.chunk_id)"
+              >
                 <div class="source-title">📄 {{ src.title || src.doc_id || '文件' }}</div>
-                <div class="source-snippet">{{ src.content_preview || src.content || '' }}</div>
+                <div v-if="src.content_preview || src.content" class="source-snippet">{{ src.content_preview || src.content }}</div>
                 <div v-if="src.score" class="source-score">相關度: {{ (src.score * 100).toFixed(0) }}%</div>
               </div>
             </div>
@@ -233,6 +263,14 @@
             <!-- Action Results -->
             <div v-if="msg.actionResults && msg.actionResults.length" class="action-results-wrap">
               <div v-for="(r, ri) in msg.actionResults" :key="ri" class="action-result-card">{{ r }}</div>
+            </div>
+
+            <!-- Reflection Badge (C2) -->
+            <div v-if="msg.reflection" class="reflection-badge" :class="reflectionClass(msg.reflection.total)">
+              <span class="reflection-label">反思</span>
+              <span class="reflection-score">{{ msg.reflection.total }}/10</span>
+              <span v-if="msg.reflection.verdict" class="reflection-verdict">{{ msg.reflection.verdict }}</span>
+              <span v-if="msg.regenerated" class="reflection-regen">已重生</span>
             </div>
           </div>
         </div>
@@ -269,6 +307,23 @@
               <span class="cmd-name">{{ doc.filename }}</span>
             </div>
           </div>
+          <div v-if="agentMenu.show" class="cmd-menu cmd-menu--bar">
+            <div class="cmd-item" @mousedown.prevent="applyAgentMode('agent')">
+              <span class="cmd-icon">🤖</span>
+              <span class="cmd-name">@agent</span>
+              <span class="cmd-desc">執行操作模式</span>
+            </div>
+            <div class="cmd-item" @mousedown.prevent="applyAgentMode('ask')">
+              <span class="cmd-icon">💬</span>
+              <span class="cmd-name">@ask</span>
+              <span class="cmd-desc">純問答模式</span>
+            </div>
+            <div class="cmd-item" @mousedown.prevent="applyAgentMode('plan')">
+              <span class="cmd-icon">📋</span>
+              <span class="cmd-name">@plan</span>
+              <span class="cmd-desc">規劃後確認模式</span>
+            </div>
+          </div>
           <el-input
             v-model="inputText"
             type="textarea"
@@ -289,6 +344,7 @@
                   </el-dropdown-menu>
                 </template>
               </el-dropdown>
+              <button class="plus-btn" :disabled="streaming" @click="openTemplatePicker" title="Prompt 模板">📋</button>
               <el-dropdown trigger="click" @command="(cmd) => chatMode = cmd" :disabled="streaming">
                 <button class="chat-mode-btn">
                   <component :is="MODE_ICONS[chatMode]" :size="13" :stroke-width="1.5" style="margin-right:4px;vertical-align:middle" />
@@ -392,6 +448,40 @@
       <el-button type="primary" @click="confirmScope">確認</el-button>
     </template>
   </el-dialog>
+
+  <!-- Chunk 內容 Dialog -->
+  <el-dialog
+    v-model="chunkModal.show"
+    :title="chunkModal.data?.doc_title ? `📄 ${chunkModal.data.doc_title}` : '文件片段'"
+    width="720px"
+    append-to-body
+  >
+    <div v-if="chunkModal.loading" class="chunk-modal-loading">載入中…</div>
+    <div v-else-if="chunkModal.error" class="chunk-modal-error">{{ chunkModal.error }}</div>
+    <div v-else-if="chunkModal.data" class="chunk-modal-body">
+      <div class="chunk-modal-meta">
+        <span>段落 #{{ chunkModal.data.chunk_index }}</span>
+        <span v-if="chunkModal.data.page_number">頁碼: {{ chunkModal.data.page_number }}</span>
+      </div>
+      <pre class="chunk-modal-content">{{ chunkModal.data.content }}</pre>
+      <div v-if="chunkModal.data.window_context" class="chunk-modal-window">
+        <div class="chunk-modal-section-title">前後文</div>
+        <pre class="chunk-modal-content">{{ chunkModal.data.window_context }}</pre>
+      </div>
+    </div>
+  </el-dialog>
+
+  <!-- Phase D：Prompt 模板選擇器 -->
+  <el-dialog v-model="templatePickerVisible" title="📋 Prompt 模板" width="640px" append-to-body>
+    <div v-if="templateLoading">載入中…</div>
+    <div v-else-if="!templateList.length" style="text-align:center; color:#999;">尚無可用模板</div>
+    <div v-else class="template-picker-list">
+      <div v-for="tpl in templateList" :key="tpl.template_id" class="template-picker-item" @click="applyTemplate(tpl)">
+        <div class="template-picker-title">{{ tpl.title }} <span class="template-picker-cat">[{{ tpl.category }}]</span></div>
+        <div class="template-picker-preview">{{ (tpl.template || '').slice(0, 120) }}{{ (tpl.template || '').length > 120 ? '…' : '' }}</div>
+      </div>
+    </div>
+  </el-dialog>
 </template>
 
 <script setup>
@@ -411,9 +501,34 @@ import { ArrowUp, Check, Plus, MessageCircle, Bot, Square, Copy, RotateCcw, Chev
 import { chatStream, chatStreamWithFile, conversationsApi, agentApi, systemSettingsApi, docsApi, chatApi, kbApi, tagsApi, ontologyApi, pluginsApi, wikiApi } from '../api/index.js'
 import { storeToRefs } from 'pinia'
 import { useChatStore } from '../stores/chat.js'
+import { useAuthStore } from '../stores/auth.js'
 
 const chatStore = useChatStore()
-const { conversations, currentConvId, messages } = storeToRefs(chatStore)
+const { conversations, currentConvId, messages, selectedModel } = storeToRefs(chatStore)
+
+// ── Phase D：Prompt 模板選擇器 ───────────────────────────────
+const templatePickerVisible = ref(false)
+const templateList = ref([])
+const templateLoading = ref(false)
+async function openTemplatePicker() {
+  templatePickerVisible.value = true
+  if (templateList.value.length) return
+  templateLoading.value = true
+  try {
+    const auth = useAuthStore()
+    const r = await fetch('/api/prompt-templates/', { headers: { Authorization: `Bearer ${auth.token}` } })
+    if (r.ok) templateList.value = await r.json()
+    else ElMessage.error('載入模板失敗')
+  } catch (e) {
+    ElMessage.error('載入模板失敗：' + e.message)
+  } finally {
+    templateLoading.value = false
+  }
+}
+function applyTemplate(tpl) {
+  inputText.value = (inputText.value ? inputText.value + '\n\n' : '') + (tpl.template || '')
+  templatePickerVisible.value = false
+}
 
 // ── highlight.js ──────────────────────────────────────────────
 ;[['javascript', javascript], ['python', python], ['typescript', typescript],
@@ -459,7 +574,6 @@ const renameTitle = ref('')
 const availableModels = ref([])
 const localModels = ref([])
 const cloudModels = ref([])
-const selectedModel = ref(localStorage.getItem('last-selected-model') || '')
 const modelCategory = ref('local')
 const currentCategoryModels = computed(() =>
   modelCategory.value === 'cloud' ? cloudModels.value : localModels.value
@@ -476,6 +590,8 @@ const SLASH_COMMANDS = [
 ]
 const slashMenu = reactive({ show: false, filtered: [] })
 const mentionMenu = reactive({ show: false, docs: [] })
+const agentMenu = reactive({ show: false })
+const chunkModal = reactive({ show: false, loading: false, error: '', data: null })
 const attachedDocs = ref([])
 // 附件檔案
 const pendingFile = ref(null)  // File 物件
@@ -510,6 +626,14 @@ function scrollToBottom() {
       atBottom.value = true
     }
   })
+}
+
+// ── Reflection（C2）──────────────────────────────────
+function reflectionClass(total) {
+  const t = Number(total) || 0
+  if (t >= 8) return 'reflection-good'
+  if (t >= 6) return 'reflection-ok'
+  return 'reflection-bad'
 }
 
 // ── Code copy (event delegation) ──────────────────────────────
@@ -551,6 +675,56 @@ async function retryFrom(idx) {
   messages.value.splice(ui)
   inputText.value = userContent
   await sendMessage()
+}
+
+// C1：重生訊息（保留原回覆，新訊息以 regenerated_from 指向原 msg）
+async function regenerateMessage(msg, idx) {
+  if (!msg.id || !currentConvId.value) return
+  const auth = useAuthStore()
+  const aiMsg = reactive({ role: 'assistant', content: '', sources: [], streaming: true, regeneratedFrom: msg.id })
+  messages.value.splice(idx + 1, 0, aiMsg)
+  scrollToBottom()
+  try {
+    const url = `/api/chat/conversations/${currentConvId.value}/messages/${msg.id}/regenerate`
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: auth.token ? { 'Authorization': `Bearer ${auth.token}` } : {},
+    })
+    if (!resp.ok || !resp.body) {
+      aiMsg.content = '⚠️ 重生失敗：' + resp.status
+      aiMsg.streaming = false
+      return
+    }
+    const reader = resp.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    while (true) {
+      const { value, done } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const parts = buffer.split('\n\n')
+      buffer = parts.pop()
+      for (const part of parts) {
+        if (!part.startsWith('data: ')) continue
+        const raw = part.slice(6).trim()
+        if (raw === '[DONE]') { aiMsg.streaming = false; break }
+        try {
+          const evt = JSON.parse(raw)
+          if (evt.type === 'token') { aiMsg.content += evt.text; if (atBottom.value) scrollToBottom() }
+          else if (evt.type === 'sources') aiMsg.sources = evt.sources || []
+          else if (evt.type === 'reflection') {
+            aiMsg.reflection = { scores: evt.scores || {}, total: evt.total || 0, verdict: evt.verdict || '', shouldRegenerate: !!evt.should_regenerate }
+          }
+          else if (evt.type === 'error') aiMsg.content = '⚠️ ' + evt.text
+        } catch {}
+      }
+    }
+  } catch (e) {
+    aiMsg.content = '⚠️ 重生錯誤：' + e.message
+  } finally {
+    aiMsg.streaming = false
+    scrollToBottom()
+  }
 }
 
 // ── Conversations ─────────────────────────────────────────────
@@ -666,7 +840,7 @@ function setModelCategory(cat) {
   modelCategory.value = cat
   const list = cat === 'cloud' ? cloudModels.value.map(m => m.value) : localModels.value
   if (list.length && !list.includes(selectedModel.value)) {
-    selectedModel.value = list[0]
+    chatStore.setSelectedModel(list[0])
   }
 }
 
@@ -701,7 +875,7 @@ async function loadModels() {
     if (selectedModel.value && allAvailable.includes(selectedModel.value)) {
       // 保留 localStorage 選擇
     } else if (!selectedModel.value || !initList.includes(selectedModel.value)) {
-      selectedModel.value = data.default || initList[0] || availableModels.value[0] || ''
+      chatStore.setSelectedModel(data.default || initList[0] || availableModels.value[0] || '')
     }
   } catch {}
 }
@@ -720,8 +894,25 @@ function onInput() {
     slashMenu.show = false
   }
   const atMatch = text.match(/@(\S*)$/)
-  if (atMatch) searchMentionDocs(atMatch[1])
-  else mentionMenu.show = false
+  if (atMatch) {
+    const q = atMatch[1].toLowerCase()
+    if ('agent'.startsWith(q) && q.length >= 0 && q !== '') {
+      // @a, @ag, @age... 都顯示 agent menu
+      agentMenu.show = 'agent'.startsWith(q)
+      mentionMenu.show = false
+      if (!agentMenu.show) searchMentionDocs(atMatch[1])
+    } else if (q === '') {
+      // 純 @ → 預設文件搜尋
+      agentMenu.show = false
+      searchMentionDocs('')
+    } else {
+      agentMenu.show = false
+      searchMentionDocs(atMatch[1])
+    }
+  } else {
+    mentionMenu.show = false
+    agentMenu.show = false
+  }
 }
 
 function applySlash(cmd) {
@@ -745,6 +936,27 @@ function applyMention(doc) {
   inputText.value = inputText.value.replace(/@\S*$/, '')
   mentionMenu.show = false
   if (!attachedDocs.value.find(d => d.id === doc.id)) attachedDocs.value.push(doc)
+}
+
+function applyAgentMode(mode) {
+  inputText.value = inputText.value.replace(/@\S*$/, '')
+  agentMenu.show = false
+  chatMode.value = mode
+  ElMessage.success(`已切換至 ${MODE_LABELS[mode]} 模式`)
+}
+
+async function openChunkModal(chunkId) {
+  chunkModal.show = true
+  chunkModal.loading = true
+  chunkModal.error = ''
+  chunkModal.data = null
+  try {
+    chunkModal.data = await docsApi.getChunk(chunkId)
+  } catch (e) {
+    chunkModal.error = `載入失敗：${e.message}`
+  } finally {
+    chunkModal.loading = false
+  }
 }
 
 function removeDoc(docId) {
@@ -782,8 +994,7 @@ async function onImportSelected(_e) {
 }
 
 function selectModel(m) {
-  selectedModel.value = m
-  try { localStorage.setItem('last-selected-model', m) } catch {}
+  chatStore.setSelectedModel(m)
   modelPopoverVisible.value = false
 }
 
@@ -859,6 +1070,25 @@ async function runChat(text) {
             }
           }
           else if (evt.type === 'error') aiMsg.content = '⚠️ ' + evt.text
+          else if (evt.type === 'reflection') {
+            aiMsg.reflection = {
+              scores: evt.scores || {},
+              total: evt.total || 0,
+              verdict: evt.verdict || '',
+              shouldRegenerate: !!evt.should_regenerate,
+            }
+          }
+          else if (evt.type === 'regen_token') {
+            if (!aiMsg.regenContent) aiMsg.regenContent = ''
+            aiMsg.regenContent += evt.text
+            if (atBottom.value) scrollToBottom()
+          }
+          else if (evt.type === 'regen_done') {
+            aiMsg.regenerated = true
+          }
+          else if (evt.type === 'system_notice') {
+            aiMsg.systemNotice = { level: evt.level || 'info', message: evt.message || '' }
+          }
         } catch {}
       }
     }
@@ -1347,14 +1577,57 @@ onUnmounted(() => {
 
 /* ── Sources ─────────────────────────────────────────────────── */
 .sources-wrap { max-width: 780px; width: 100%; margin: 6px auto 0; display: flex; flex-wrap: wrap; gap: 8px; }
-.source-card { background: #f0f7ff; border: 1px solid #c0d8f0; border-radius: 8px; padding: 8px 12px; font-size: 12px; max-width: 220px; }
+.source-card { background: #f0f7ff; border: 1px solid #c0d8f0; border-radius: 8px; padding: 8px 12px; font-size: 12px; max-width: 220px; transition: background 0.15s, border-color 0.15s; }
+.source-card--clickable { cursor: pointer; }
+.source-card--clickable:hover { background: #e0eefc; border-color: #8fbce8; }
 .source-title { font-weight: 600; color: #1a6fa8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .source-snippet { color: #555; margin-top: 4px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .source-score { color: #888; margin-top: 4px; }
 
+/* ── Chunk Modal ─────────────────────────────────────────────── */
+.chunk-modal-loading, .chunk-modal-error { padding: 24px; text-align: center; color: #888; }
+.chunk-modal-error { color: #f56c6c; }
+.chunk-modal-meta { color: #888; font-size: 12px; margin-bottom: 8px; display: flex; gap: 16px; }
+.chunk-modal-content { white-space: pre-wrap; word-break: break-word; background: #f8f9fb; border: 1px solid #ebeef5; border-radius: 6px; padding: 12px; font-size: 13px; line-height: 1.65; max-height: 420px; overflow: auto; margin: 0; }
+.chunk-modal-window { margin-top: 16px; }
+.chunk-modal-section-title { font-size: 12px; color: #666; font-weight: 600; margin-bottom: 6px; }
+
 /* ── Action Results ──────────────────────────────────────────── */
 .action-results-wrap { max-width: 780px; width: 100%; margin: 6px auto 0; display: flex; flex-direction: column; gap: 4px; }
 .action-result-card { background: #f0faf0; border: 1px solid #b7ddb7; border-radius: 8px; padding: 6px 12px; font-size: 13px; color: #2d6a2d; }
+
+/* ── Reflection Badge (C2) ─────────────────────────────────── */
+.reflection-badge {
+  max-width: 780px; width: fit-content; margin: 6px auto 0;
+  padding: 4px 10px; border-radius: 12px; font-size: 12px;
+  display: inline-flex; align-items: center; gap: 8px;
+}
+.reflection-badge .reflection-label { font-weight: 600; }
+.reflection-badge .reflection-score { font-family: ui-monospace, monospace; }
+.reflection-badge .reflection-verdict { color: inherit; opacity: 0.85; }
+.reflection-badge .reflection-regen {
+  background: rgba(0,0,0,0.08); padding: 1px 6px; border-radius: 8px; font-size: 11px;
+}
+.reflection-good { background: #e7f8ee; color: #1b6e3b; border: 1px solid #b7e2c5; }
+.reflection-ok   { background: #fff7e1; color: #8a5b00; border: 1px solid #f0d68a; }
+.reflection-bad  { background: #fdecec; color: #a63232; border: 1px solid #f1b6b6; }
+
+/* ── System Notice (E7) ──────────────────────────────────── */
+.system-notice {
+  max-width: 780px; width: 100%; margin: 6px auto 0;
+  padding: 8px 12px; border-radius: 8px; font-size: 13px;
+}
+.system-notice--warning { background: #fff7e1; color: #8a5b00; border: 1px solid #f0d68a; }
+.system-notice--info { background: #e8f0fe; color: #1a4480; border: 1px solid #b6d3f5; }
+.system-notice--error { background: #fdecec; color: #a63232; border: 1px solid #f1b6b6; }
+
+/* ── Template Picker (Phase D) ───────────────────────────── */
+.template-picker-list { max-height: 60vh; overflow-y: auto; }
+.template-picker-item { padding: 10px 12px; border: 1px solid #eee; border-radius: 8px; margin-bottom: 8px; cursor: pointer; transition: background .15s; }
+.template-picker-item:hover { background: #f5f7fa; }
+.template-picker-title { font-weight: 600; font-size: 14px; }
+.template-picker-cat { color: #999; font-size: 12px; font-weight: 400; margin-left: 4px; }
+.template-picker-preview { color: #666; font-size: 12px; margin-top: 4px; white-space: pre-wrap; }
 
 /* ── Scroll FAB ──────────────────────────────────────────────── */
 .scroll-fab {

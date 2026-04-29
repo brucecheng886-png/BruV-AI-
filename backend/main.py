@@ -17,6 +17,7 @@ from routers import protein_router
 from routers import prompt_engine
 from routers import tags
 from routers import agent_skills
+from routers import monitoring
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +39,10 @@ async def lifespan(app: FastAPI):
         from database import AsyncSessionLocal
         from sqlalchemy import text as _t
         async with AsyncSessionLocal() as _db:
+            # 一次性 schema migration: knowledge_bases.agent_prompt
+            await _db.execute(_t(
+                "ALTER TABLE knowledge_bases ADD COLUMN IF NOT EXISTS agent_prompt TEXT"
+            ))
             await _db.execute(_t(
                 "INSERT INTO agent_skills (page_key, name, user_prompt, is_enabled) "
                 "VALUES (:pk, :nm, :up, TRUE) "
@@ -104,3 +109,4 @@ app.include_router(protein_router.router,  prefix="/api/protein",   tags=["prote
 app.include_router(prompt_engine.router,   prefix="/api/prompt-templates", tags=["prompt-engine"])
 app.include_router(tags.router,            prefix="/api/tags",             tags=["tags"])
 app.include_router(agent_skills.router,    prefix="/api/agent-skills",     tags=["agent-skills"])
+app.include_router(monitoring.router,      prefix="/api/monitoring",       tags=["monitoring"])

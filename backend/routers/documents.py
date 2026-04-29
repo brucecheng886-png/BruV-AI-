@@ -170,23 +170,25 @@ async def import_excel(
     if not rows:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Excel 為空")
 
-    # 解析欄位對應（不區分大小寫）
+    # 解析欄位對應（不區分大小寫，支援多種別名）
     header = [str(h).strip().lower() if h is not None else "" for h in rows[0]]
-    def _col(name: str) -> int | None:
-        try:
-            return header.index(name)
-        except ValueError:
-            return None
+    def _col(*names: str) -> int | None:
+        for n in names:
+            try:
+                return header.index(n.lower())
+            except ValueError:
+                continue
+        return None
 
-    col_srl   = _col("srl")
-    col_title = _col("title")
-    col_link  = _col("link")
-    col_img   = _col("imgsrc")
+    col_srl   = _col("srl", "id", "no", "編號")
+    col_title = _col("title", "name", "標題", "名稱")
+    col_link  = _col("link", "hyperlink", "url", "連結", "網址")
+    col_img   = _col("imgsrc", "image", "img", "cover", "封面")
 
     if col_link is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Excel 缺少 'link' 欄位",
+            detail=f"Excel 缺少連結欄位（接受名稱：link / hyperlink / url / 連結 / 網址，目前欄位：{rows[0]}）",
         )
 
     # 不支援的 URL 關鍵字及對應原因
@@ -286,6 +288,294 @@ async def import_excel(
         "queued":        len(queued_ids),
         "skipped":       len(skipped_items),
         "skipped_items": skipped_items,
+    }
+
+
+# ── 智慧匯入（AI 分析） ───────────────────────────────────────
+
+class SmartImportRequest(BaseModel):
+    urls: list[str]
+    knowledge_base_id: Optional[str] = None
+
+
+class SmartImportItem(BaseModel):
+    url: str
+    title: Optional[str] = None
+    description: Optional[str] = None
+    tags: Optional[list[str]] = None
+    cover_image_url: Optional[str] = None
+    knowledge_base_id: Optional[str] = None
+
+
+class SmartImportConfirmRequest(BaseModel):
+    items: list[SmartImportItem]
+
+
+_OG_PATTERNS = {
+    "og_title":       r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']+)',
+    "og_description": r'<meta[^>]+property=["\']og:description["\'][^>]+content=["\']([^"\']+)',
+    "og_image":       r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)',
+    "title_tag":      r'<title[^>]*>([^<]+)</title>',
+    "h1_tag":         r'<h1[^>]*>([^<]+)</h1>',
+}
+
+
+def _extract_meta(html: str) -> dict:
+    import re as _re
+    out: dict = {}
+    for key, pat in _OG_PATTERNS.items():
+        m = _re.search(pat, html, _re.IGNORECASE | _re.DOTALL)
+        if m:
+            out[key] = m.group(1).strip()
+    return out
+
+
+def _parse_smart_json(text: str) -> dict:
+    """從 LLM 回覆中嘗試抽取 JSON 物件。"""
+    import re as _re
+    if not text:
+        return {}
+    # 去掉 markdown code fence
+    cleaned = _re.sub(r'^```(?:json)?\s*|\s*```$', '', text.strip(), flags=_re.MULTILINE)
+    # 找第一段 {...}
+    m = _re.search(r'\{.*\}', cleaned, _re.DOTALL)
+    if not m:
+        return {}
+    try:
+        import json as _json
+        return _json.loads(m.group(0))
+    except Exception:
+        return {}
+
+
+@router.post("/smart-import")
+async def smart_import_preview(
+    body: SmartImportRequest,
+    current_user: CurrentUser,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    智慧匯入預覽：
+    1. 對每個 URL httpx 爬 HTML（timeout 15s）並抽取 meta
+    2. 取得所有 KB 清單供 AI 參考
+    3. 對每筆呼叫 llm_complete 產生 title/description/tags/recommended_kb
+    4. 回傳預覽清單（不寫 DB、不觸發爬取）
+    """
+    import json as _json
+    import httpx as _httpx
+    from config import settings as _settings
+    from llm_client import llm_complete
+    from routers.settings_router import get_llm_runtime_config
+    from services.llm_resolver import resolve_model_runtime, apply_model_runtime
+    from models import KnowledgeBase  # type: ignore
+
+    if not body.urls:
+        raise HTTPException(status_code=400, detail="urls 不可為空")
+    if len(body.urls) > 50:
+        raise HTTPException(status_code=400, detail="一次最多 50 筆 URL")
+
+    # 1. 取得所有 KB（提供 AI 參考）
+    kb_rows = (await db.execute(select(KnowledgeBase))).scalars().all()
+    kb_list = [{"id": kb.id, "name": kb.name, "description": kb.description or ""} for kb in kb_rows]
+    kb_summary = "\n".join(f'- id={kb["id"]} name={kb["name"]} desc={kb["description"][:60]}' for kb in kb_list) or "（無）"
+
+    # 2. 解析 LLM runtime config（依第一原則：model-level key 優先）
+    runtime_config = await get_llm_runtime_config(db)
+    _model = runtime_config.get("model")
+    _provider = runtime_config.get("provider")
+    if _model and _provider and _provider != "ollama":
+        try:
+            _mr = await resolve_model_runtime(db, _model, fallback_provider=_provider)
+            runtime_config = apply_model_runtime(runtime_config, _mr)
+        except ValueError as _ve:
+            raise HTTPException(status_code=422, detail=f"模型設定錯誤：{_ve}")
+
+    # 3. 並行爬取所有 URL
+    async def _fetch(url: str) -> tuple[str, str | None, str | None]:
+        try:
+            async with _httpx.AsyncClient(
+                timeout=15.0, follow_redirects=True,
+                headers={"User-Agent": "Mozilla/5.0 (BruV AI Smart Import)"},
+            ) as client:
+                resp = await client.get(url)
+                resp.raise_for_status()
+                return url, resp.text, None
+        except Exception as exc:
+            return url, None, str(exc)[:200]
+
+    import asyncio as _asyncio
+    fetched = await _asyncio.gather(*[_fetch(u) for u in body.urls])
+
+    # 4. 對成功的逐筆呼叫 LLM 分析
+    items: list[dict] = []
+    for url, html, err in fetched:
+        if err or not html:
+            items.append({
+                "url": url,
+                "title": None, "description": None,
+                "tags": [], "cover_image_url": None,
+                "recommended_kb_id": body.knowledge_base_id,
+                "recommended_kb_reason": None,
+                "error": err or "未取得內容",
+            })
+            continue
+
+        meta = _extract_meta(html)
+        # 截取部份 body 內文供 AI 分析（去 tag）
+        import re as _re
+        text_body = _re.sub(r'<script[^>]*>.*?</script>', '', html, flags=_re.IGNORECASE | _re.DOTALL)
+        text_body = _re.sub(r'<style[^>]*>.*?</style>', '', text_body, flags=_re.IGNORECASE | _re.DOTALL)
+        text_body = _re.sub(r'<[^>]+>', ' ', text_body)
+        text_body = _re.sub(r'\s+', ' ', text_body)[:3000]
+
+        prompt = (
+            "你是文件分類助理。請依下列網頁內容輸出 JSON（且只輸出 JSON，不要任何其他文字、不要 markdown）：\n"
+            '{ "title": "...", "description": "100字內中文摘要", '
+            '"tags": ["..","..","..","..","..",], '
+            '"recommended_kb_id": "知識庫 id 或 null", "recommended_kb_reason": "選擇原因（30字內）" }\n\n'
+            f"## 現有知識庫清單\n{kb_summary}\n\n"
+            f"## 網頁 meta\n"
+            f"og:title={meta.get('og_title','')}\n"
+            f"og:description={meta.get('og_description','')}\n"
+            f"<title>={meta.get('title_tag','')}\n"
+            f"<h1>={meta.get('h1_tag','')}\n\n"
+            f"## 網頁內文（節錄）\n{text_body}"
+        )
+
+        ai_data: dict = {}
+        ai_error = None
+        try:
+            reply = await llm_complete(
+                [{"role": "user", "content": prompt}],
+                _settings,
+                config_override=runtime_config,
+                temperature=0.2,
+                max_tokens=600,
+            )
+            ai_data = _parse_smart_json(reply)
+        except Exception as exc:
+            ai_error = str(exc)[:200]
+            logger.warning("smart-import LLM failed for %s: %s", url, exc)
+
+        title = (ai_data.get("title") or meta.get("og_title") or meta.get("title_tag") or url[:200]).strip()[:300]
+        description = (ai_data.get("description") or meta.get("og_description") or "").strip()[:500]
+        tags_raw = ai_data.get("tags") or []
+        tags = [str(t).strip()[:50] for t in tags_raw if t and str(t).strip()][:8] if isinstance(tags_raw, list) else []
+        cover = meta.get("og_image") or None
+
+        rec_kb_id = ai_data.get("recommended_kb_id")
+        # 校驗 rec_kb_id 是否真的存在
+        valid_kb_ids = {kb["id"] for kb in kb_list}
+        if rec_kb_id not in valid_kb_ids:
+            rec_kb_id = body.knowledge_base_id  # fallback 使用者指定
+
+        items.append({
+            "url": url,
+            "title": title,
+            "description": description,
+            "tags": tags,
+            "cover_image_url": cover,
+            "recommended_kb_id": rec_kb_id,
+            "recommended_kb_reason": (ai_data.get("recommended_kb_reason") or "")[:120] or None,
+            "error": ai_error,
+        })
+
+    return {"items": items, "kbs": kb_list}
+
+
+@router.post("/smart-import/confirm", status_code=status.HTTP_202_ACCEPTED)
+async def smart_import_confirm(
+    body: SmartImportConfirmRequest,
+    current_user: CurrentUser,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    確認匯入：建立 Document、（可選）寫入 tags、觸發爬取任務。
+    單筆失敗不影響其他筆。
+    """
+    from tasks.crawl_tasks import crawl_document
+    from models import Tag as _Tag, DocumentTag as _DocumentTag  # type: ignore
+    import re as _re
+
+    if not body.items:
+        raise HTTPException(status_code=400, detail="items 不可為空")
+
+    queued: list[str] = []
+    failed: list[dict] = []
+
+    # 預先建立 tag（去重 lookup-or-create）
+    tag_name_to_id: dict[str, str] = {}
+    all_tag_names = {t.strip() for it in body.items for t in (it.tags or []) if t and t.strip()}
+    if all_tag_names:
+        existing = (await db.execute(
+            select(_Tag).where(_Tag.name.in_(list(all_tag_names)))
+        )).scalars().all()
+        for t in existing:
+            tag_name_to_id[t.name] = t.id
+        for name in all_tag_names - set(tag_name_to_id.keys()):
+            slug = _re.sub(r'[^a-z0-9-]+', '-', name.lower()).strip('-') or str(uuid.uuid4())[:8]
+            # slug 衝突簡單處理：加短 uuid
+            slug_unique = f"{slug}-{str(uuid.uuid4())[:6]}"
+            t = _Tag(id=str(uuid.uuid4()), name=name, slug=slug_unique,
+                     created_by=current_user.id if current_user else None)
+            db.add(t)
+            tag_name_to_id[name] = t.id
+        await db.commit()
+
+    for item in body.items:
+        url = (item.url or "").strip()
+        if not url or not url.startswith(("http://", "https://")):
+            failed.append({"url": url, "reason": "無效 URL"})
+            continue
+        try:
+            doc_id = str(uuid.uuid4())
+            doc = Document(
+                id=doc_id,
+                title=(item.title or url)[:300],
+                source=url,
+                file_type="html",
+                status="pending",
+                created_by=current_user.id if current_user else None,
+                knowledge_base_id=item.knowledge_base_id or None,
+                cover_image_url=item.cover_image_url,
+                custom_fields={"ai_description": item.description or ""},
+            )
+            db.add(doc)
+            await db.flush()
+
+            if item.knowledge_base_id:
+                await db.execute(
+                    pg_insert(DocumentKnowledgeBase).values(
+                        doc_id=doc_id, kb_id=item.knowledge_base_id, source="smart-import"
+                    ).on_conflict_do_nothing(index_elements=["doc_id", "kb_id"])
+                )
+
+            # 標籤關聯
+            for tname in (item.tags or []):
+                tid = tag_name_to_id.get(tname.strip())
+                if not tid:
+                    continue
+                db.add(_DocumentTag(doc_id=doc_id, tag_id=tid))
+
+            await db.commit()
+            crawl_document.delay(doc_id, url)
+            queued.append(doc_id)
+        except Exception as exc:
+            await db.rollback()
+            logger.exception("smart-import-confirm 單筆失敗 url=%s", url)
+            failed.append({"url": url, "reason": str(exc)[:200]})
+
+    logger.info(
+        "smart-import-confirm: total=%d queued=%d failed=%d user=%s",
+        len(body.items), len(queued), len(failed),
+        current_user.id if current_user else "anon",
+    )
+    return {
+        "total":   len(body.items),
+        "queued":  len(queued),
+        "failed":  len(failed),
+        "doc_ids": queued,
+        "failed_items": failed,
     }
 
 
@@ -668,6 +958,33 @@ async def update_custom_fields(
     return {"doc_id": doc_id, "custom_fields": updated}
 
 
+@router.get("/chunks/{chunk_id}")
+async def get_chunk_by_id(
+    chunk_id: str,
+    current_user: CurrentUser = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """取得單一 chunk 的完整內容（給 source 卡片點擊跳轉用）"""
+    from models import Chunk
+    result = await db.execute(select(Chunk).where(Chunk.id == chunk_id))
+    chunk = result.scalar_one_or_none()
+    if chunk is None:
+        raise HTTPException(status_code=404, detail="Chunk 不存在")
+
+    doc_result = await db.execute(select(Document).where(Document.id == chunk.doc_id))
+    doc = doc_result.scalar_one_or_none()
+
+    return {
+        "id":             chunk.id,
+        "doc_id":         chunk.doc_id,
+        "doc_title":      doc.title if doc else None,
+        "content":        chunk.content,
+        "chunk_index":    chunk.chunk_index,
+        "page_number":    chunk.page_number,
+        "window_context": chunk.window_context,
+    }
+
+
 @router.get("/{doc_id}/chunks")
 async def get_document_chunks(
     doc_id: str,
@@ -1021,13 +1338,14 @@ async def search_documents_ai(
 
     # 3. Qdrant 向量搜尋
     qdrant = get_qdrant_client()
-    hits = await qdrant.search(
+    search_result_obj = await qdrant.query_points(
         collection_name=settings.QDRANT_COLLECTION,
-        query_vector=query_vec,
+        query=query_vec,
         limit=body.top_k * 5,
         query_filter=search_filter,
         with_payload=True,
     )
+    hits = search_result_obj.points
 
     # 4. 聚合：每個 doc_id 保留最高分
     seen: dict[str, dict] = {}

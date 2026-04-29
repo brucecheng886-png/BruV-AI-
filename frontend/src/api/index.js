@@ -84,6 +84,8 @@ export const docsApi = {
     const qs = new URLSearchParams(params).toString()
     return apiFetch(`/api/documents/${id}/chunks?${qs}`, { headers: getHeaders(false) }).then(handleResponse)
   },
+  getChunk: (chunkId) =>
+    apiFetch(`/api/documents/chunks/${chunkId}`, { headers: getHeaders(false) }).then(handleResponse),
   moveToKb: (docId, kbId) =>
     apiFetch(`/api/documents/${docId}/kb`, {
       method: 'PATCH', headers: getHeaders(),
@@ -129,6 +131,16 @@ export const docsApi = {
       body: fd,
     }).then(handleResponse)
   },
+  smartImport: (urls, kbId = null) =>
+    apiFetch('/api/documents/smart-import', {
+      method: 'POST', headers: getHeaders(),
+      body: JSON.stringify({ urls, knowledge_base_id: kbId }),
+    }).then(handleResponse),
+  smartImportConfirm: (items) =>
+    apiFetch('/api/documents/smart-import/confirm', {
+      method: 'POST', headers: getHeaders(),
+      body: JSON.stringify({ items }),
+    }).then(handleResponse),
   trash: (params = {}) => {
     const qs = new URLSearchParams(params).toString()
     return apiFetch(`/api/documents/trash${qs ? '?' + qs : ''}`, { headers: getHeaders(false) }).then(handleResponse)
@@ -200,10 +212,29 @@ export const wikiApi = {
     apiFetch(`/api/wiki/models/${id}`, { method: 'PUT', headers: getHeaders(), body: JSON.stringify(body) }).then(handleResponse),
   delete: (id) =>
     apiFetch(`/api/wiki/models/${id}`, { method: 'DELETE', headers: getHeaders(false) }).then(handleResponse),
+  updateGovernance: (id, body) =>
+    apiFetch(`/api/wiki/models/${id}/governance`, { method: 'PATCH', headers: getHeaders(), body: JSON.stringify(body) }).then(handleResponse),
   compare: (idA, idB) =>
     apiFetch(`/api/wiki/models/compare/two?id_a=${idA}&id_b=${idB}`, { headers: getHeaders(false) }).then(handleResponse),
   verifyModel: (body) =>
     apiFetch('/api/wiki/models/verify', { method: 'POST', headers: getHeaders(), body: JSON.stringify(body) }).then(handleResponse),
+}
+
+// Monitoring (Phase B6)
+export const monitoringApi = {
+  getUsageSummary: (params = {}) => {
+    const qs = new URLSearchParams()
+    if (params.start) qs.set('start', params.start)
+    if (params.end)   qs.set('end',   params.end)
+    if (params.user_id) qs.set('user_id', params.user_id)
+    const q = qs.toString()
+    return apiFetch(`/api/monitoring/usage${q ? '?' + q : ''}`, { headers: getHeaders(false) }).then(handleResponse)
+  },
+  getUsageDaily: (days = 30, user_id = null) => {
+    const qs = new URLSearchParams({ days: String(days) })
+    if (user_id) qs.set('user_id', user_id)
+    return apiFetch(`/api/monitoring/usage/daily?${qs.toString()}`, { headers: getHeaders(false) }).then(handleResponse)
+  },
 }
 
 // Plugins
@@ -381,4 +412,10 @@ export const agentSkillsApi = {
     apiFetch('/api/agent-skills/', { headers: getHeaders(false) }).then(handleResponse),
   update: (pageKey, body) =>
     apiFetch(`/api/agent-skills/${pageKey}`, { method: 'PATCH', headers: getHeaders(), body: JSON.stringify(body) }).then(handleResponse),
+  available: () =>
+    apiFetch('/api/agent-skills/store/available', { headers: getHeaders(false) }).then(handleResponse),
+  install: (pageKey) =>
+    apiFetch('/api/agent-skills/store/install', { method: 'POST', headers: getHeaders(), body: JSON.stringify({ page_key: pageKey }) }).then(handleResponse),
+  uninstall: (pageKey) =>
+    apiFetch(`/api/agent-skills/store/${pageKey}`, { method: 'DELETE', headers: getHeaders(false) }).then(handleResponse),
 }

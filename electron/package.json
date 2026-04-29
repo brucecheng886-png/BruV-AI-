@@ -6,17 +6,38 @@
   "scripts": {
     "start": "electron .",
     "build:win": "electron-builder --win --x64",
-    "build:mac": "electron-builder --mac"
+    "build:mac": "electron-builder --mac",
+    "dist": "electron-builder --win"
   },
   "build": {
-    "appId": "com.bruv.ai-kb",
-    "productName": "BruV AI 知識庫",
+    "appId": "com.bruvai.app",
+    "productName": "BruV AI",
     "directories": {
       "output": "dist"
     },
+    "files": [
+      "main.js",
+      "loading.html",
+      "loading-preload.js",
+      "setup-wizard.html",
+      "setup-preload.js",
+      "preload.js",
+      "node_modules/**"
+    ],
+    "extraResources": [
+      {
+        "from": "../docker-compose.yml",
+        "to": "docker-compose.yml"
+      },
+      {
+        "from": "../.env",
+        "to": ".env"
+      }
+    ],
     "win": {
       "target": "nsis",
-      "icon": "assets/icon.ico"
+      "icon": "assets/icon.ico",
+      "signAndEditExecutable": false
     },
     "mac": {
       "target": "dmg",
@@ -25,11 +46,16 @@
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
-      "createDesktopShortcut": true
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "BruV AI"
     }
   },
   "devDependencies": {
     "electron": "^30.5.1",
-    "electron-builder": "^24.0.0"
+    "electron-builder": "^24.0.0",
+    "png-to-ico": "^3.0.1",
+    "sharp": "^0.34.5",
+    "svg2ico": "^1.0.35"
   }
 }

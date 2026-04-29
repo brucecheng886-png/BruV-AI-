@@ -31,6 +31,7 @@ class KBIn(BaseModel):
     language: str | None = "auto"
     rerank_enabled: bool | None = None
     default_top_k: int | None = None
+    agent_prompt: str | None = None
 
 
 class KBOut(BaseModel):
@@ -48,6 +49,7 @@ class KBOut(BaseModel):
     language: str | None = None
     rerank_enabled: bool | None = None
     default_top_k: int | None = None
+    agent_prompt: str | None = None
 
 
 # ── Endpoints ─────────────────────────────────────────────────
@@ -68,10 +70,12 @@ def _kb_to_out(kb: KnowledgeBase, doc_count: int) -> KBOut:
         language=kb.language,
         rerank_enabled=kb.rerank_enabled,
         default_top_k=kb.default_top_k,
+        agent_prompt=kb.agent_prompt,
     )
 
 
 @router.get("", response_model=list[KBOut])
+@router.get("/", response_model=list[KBOut], include_in_schema=False)
 async def list_knowledge_bases(
     current_user: CurrentUser = None,
     db: AsyncSession = Depends(get_db),
@@ -146,6 +150,7 @@ async def get_knowledge_base_stats(
 
 
 @router.post("", response_model=KBOut, status_code=status.HTTP_201_CREATED)
+@router.post("/", response_model=KBOut, status_code=status.HTTP_201_CREATED, include_in_schema=False)
 async def create_knowledge_base(
     body: KBIn,
     current_user: CurrentUser = None,
@@ -164,6 +169,7 @@ async def create_knowledge_base(
         language=body.language or "auto",
         rerank_enabled=body.rerank_enabled,
         default_top_k=body.default_top_k,
+        agent_prompt=body.agent_prompt,
         created_by=current_user.id if current_user else None,
     )
     db.add(kb)
@@ -194,6 +200,7 @@ async def update_knowledge_base(
     kb.language = body.language or "auto"
     kb.rerank_enabled = body.rerank_enabled
     kb.default_top_k = body.default_top_k
+    kb.agent_prompt = body.agent_prompt
     await db.commit()
     await db.refresh(kb)
     count_result = await db.execute(

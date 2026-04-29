@@ -96,6 +96,36 @@ TOOLS: list[dict] = [
             "required": ["query"],
         },
     },
+    {
+        "name": "rag_search",
+        "description": "對使用者知識庫做語義搜尋，回傳最相關的文件片段（chunk）。可選擇限定於特定 KB。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "自然語言查詢"},
+                "kb_id": {"type": "string", "description": "（選填）限定知識庫 ID"},
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "list_kbs",
+        "description": "列出所有知識庫（含 id、名稱、描述、文件數）。",
+        "inputSchema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "list_docs",
+        "description": "列出文件清單,可選擇以 kb_id 過濾。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "kb_id": {"type": "string", "description": "（選填）限定知識庫 ID"},
+                "search": {"type": "string", "description": "（選填）檔名關鍵字"},
+                "page_size": {"type": "integer", "description": "回傳數量上限,預設 20", "default": 20},
+            },
+            "required": [],
+        },
+    },
 ]
 
 # ── LLM 填充（MCP 端，可切換 provider） ───────────────────────
@@ -285,6 +315,80 @@ async def _call_search(query: str, top_k: int) -> str:
     return "\n".join(lines)
 
 
+async def _call_rag_search(query: str, kb_id: str | None) -> str:
+    payload: dict = {"query": query}
+    if kb_id:
+        payload["kb_scope_id"] = kb_id
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+        resp = await client.post(
+            f"{MAIN_APP_URL}/api/chat/rag-search",
+            json=payload,
+            headers=await _auth_headers(),
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    results = data.get("results", [])
+    if not results:
+        return f"找不到與「{query}」相關的文件片段。"
+    lines = [f"知識庫搜尋「{query}」，找到 {len(results)} 個片段：", ""]
+    for i, r in enumerate(results, 1):
+        title = r.get("title") or r.get("doc_id") or "（無標題）"
+        page = r.get("page_number")
+        page_str = f" p.{page}" if page else ""
+        lines.append(
+            f"{i}. **{title}**{page_str} (chunk_id: `{r.get('chunk_id','')}`, score: {r.get('score',0):.3f})"
+        )
+        lines.append(f"   {r.get('content_preview','')}")
+        lines.append("")
+    return "\n".join(lines)
+
+
+async def _call_list_kbs() -> str:
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+        resp = await client.get(
+            f"{MAIN_APP_URL}/api/knowledge-bases",
+            headers=await _auth_headers(),
+        )
+        resp.raise_for_status()
+        kbs = resp.json()
+    if not kbs:
+        return "目前沒有任何知識庫。"
+    lines = [f"共 {len(kbs)} 個知識庫：", ""]
+    for kb in kbs:
+        lines.append(
+            f"- **{kb.get('name','')}** (id: `{kb.get('id','')}`, doc_count: {kb.get('document_count', '?')})"
+        )
+        if kb.get("description"):
+            lines.append(f"  {kb['description']}")
+    return "\n".join(lines)
+
+
+async def _call_list_docs(kb_id: str | None, search: str | None, page_size: int) -> str:
+    params: dict = {"page_size": page_size}
+    if kb_id:
+        params["knowledge_base_id"] = kb_id
+    if search:
+        params["search"] = search
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+        resp = await client.get(
+            f"{MAIN_APP_URL}/api/documents/",
+            params=params,
+            headers=await _auth_headers(),
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    docs = data if isinstance(data, list) else data.get("items", [])
+    if not docs:
+        return "找不到符合條件的文件。"
+    lines = [f"共 {len(docs)} 份文件：", ""]
+    for d in docs:
+        lines.append(
+            f"- **{d.get('filename') or d.get('title','')}** (id: `{d.get('id','')}`, "
+            f"chunks: {d.get('chunk_count', '?')}, kb: `{d.get('knowledge_base_id','')}`)"
+        )
+    return "\n".join(lines)
+
+
 # ── Tool 分派 ─────────────────────────────────────────────────
 
 async def _dispatch_tool(name: str, arguments: dict) -> str:
@@ -304,6 +408,22 @@ async def _dispatch_tool(name: str, arguments: dict) -> str:
             raise ValueError("query 為必填欄位")
         top_k = int(arguments.get("top_k") or 3)
         return await _call_search(query, top_k)
+
+    if name == "rag_search":
+        query = arguments.get("query", "")
+        if not query:
+            raise ValueError("query 為必填欄位")
+        return await _call_rag_search(query, arguments.get("kb_id"))
+
+    if name == "list_kbs":
+        return await _call_list_kbs()
+
+    if name == "list_docs":
+        return await _call_list_docs(
+            arguments.get("kb_id"),
+            arguments.get("search"),
+            int(arguments.get("page_size") or 20),
+        )
 
     raise ValueError(f"未知的工具：{name}")
 

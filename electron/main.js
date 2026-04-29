@@ -1,7 +1,9 @@
-const { app, BrowserWindow, shell, ipcMain, globalShortcut, Menu, dialog, net } = require('electron')
+const { app, BrowserWindow, shell, ipcMain, globalShortcut, Menu, MenuItem, clipboard, dialog, net } = require('electron')
 const path = require('path')
 const https = require('https')
 const http = require('http')
+const fs = require('fs')
+const { exec, spawn } = require('child_process')
 
 const TARGET_URL = 'http://localhost:80'
 const BACKEND_HEALTH_URL = 'http://localhost:80/api/health'
@@ -11,48 +13,155 @@ const UPDATE_CHECK_INTERVAL_MS = 60 * 1000 // 每 60 秒檢查前端是否有新
 
 let mainWindow = null
 let splashWindow = null
+let setupWizardWindow = null
 let currentBundleHash = null // 記錄目前載入的前端 bundle hash
 let updateCheckTimer = null
+
+// docker-compose.yml 路徑（打包後從 extraResources，開發時從專案根目錄）
+const resourcePath = app.isPackaged
+  ? process.resourcesPath
+  : path.join(__dirname, '..')
+const composePath = path.join(resourcePath, 'docker-compose.yml')
+
+// ── Helper：Promise 包裝 exec ─────────────────────────────────────────────
+function runCommand (cmd, timeoutMs = 15000) {
+  return new Promise((resolve, reject) => {
+    exec(cmd, { timeout: timeoutMs }, (err, stdout) => {
+      if (err) reject(err)
+      else resolve(stdout)
+    })
+  })
+}
+
+// ── 更新 loading 視窗狀態文字 ─────────────────────────────────────────
+function updateLoadingStatus (text) {
+  if (splashWindow && !splashWindow.isDestroyed()) {
+    splashWindow.webContents.send('loading-status', text)
+  }
+}
 
 // ── 建立 Splash 等待視窗 ─────────────────────────────────────────────────────
 function createSplash () {
   splashWindow = new BrowserWindow({
-    width: 420,
-    height: 260,
+    width: 440,
+    height: 300,
     frame: false,
     alwaysOnTop: true,
     transparent: false,
     resizable: false,
-    webPreferences: { nodeIntegration: false }
+    webPreferences: {
+      preload: path.join(__dirname, 'loading-preload.js'),
+      nodeIntegration: false,
+      contextIsolation: true,
+    }
   })
-  splashWindow.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(`
-    <!DOCTYPE html>
-    <html>
-    <head>
-      <meta charset="UTF-8">
-      <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-          font-family: -apple-system, "Microsoft JhengHei", sans-serif;
-          background: #0f172a; color: #e2e8f0;
-          display: flex; flex-direction: column;
-          align-items: center; justify-content: center;
-          height: 100vh; gap: 20px;
-        }
-        h1 { font-size: 22px; color: #60a5fa; }
-        p  { font-size: 13px; color: #94a3b8; }
-        .dot { display: inline-block; animation: blink 1.2s infinite; }
-        .dot:nth-child(2) { animation-delay: 0.2s; }
-        .dot:nth-child(3) { animation-delay: 0.4s; }
-        @keyframes blink { 0%,80%,100%{opacity:0} 40%{opacity:1} }
-      </style>
-    </head>
-    <body>
-      <h1>BruV AI 知識庫</h1>
-      <p>正在等待後端服務啟動<span class="dot">.</span><span class="dot">.</span><span class="dot">.</span></p>
-    </body>
-    </html>
-  `))
+  splashWindow.loadFile(path.join(__dirname, 'loading.html'))
+}
+
+// ── Docker 環境檢測與啟動流程 ─────────────────────────────────────────────
+/**
+ * Step 1: 確認 Docker 已安裝。未安裝則引導下載并退出。
+ * @returns {Promise<boolean>}
+ */
+async function checkDocker () {
+  updateLoadingStatus('正在檢測 Docker 環境...')
+  try {
+    await runCommand('docker --version')
+    return true
+  } catch {
+    if (splashWindow && !splashWindow.isDestroyed()) splashWindow.hide()
+    const { response } = await dialog.showMessageBox({
+      type: 'warning',
+      buttons: ['立即下載安裝', '取消'],
+      defaultId: 0,
+      cancelId: 1,
+      title: 'BruV AI — 需要安裝 Docker',
+      message: '需要安裝 Docker Desktop 才能使用 BruV AI。是否立即下載安裝？',
+      detail: '請安裝 Docker Desktop 後重新啟動 BruV AI。'
+    })
+    if (response === 0) {
+      shell.openExternal('https://www.docker.com/products/docker-desktop/')
+      await dialog.showMessageBox({
+        type: 'info',
+        buttons: ['確定'],
+        title: 'BruV AI',
+        message: '請安裝完成後重新啟動 BruV AI'
+      })
+    }
+    app.quit()
+    return false
+  }
+}
+
+/**
+ * Step 2: 確認 Docker daemon 正在執行。若否，自動啟動 Docker Desktop 並等待。
+ * @returns {Promise<boolean>}
+ */
+async function ensureDockerRunning () {
+  try {
+    await runCommand('docker info')
+    return true
+  } catch {
+    updateLoadingStatus('正在啟動 Docker Desktop...')
+    try {
+      if (process.platform === 'win32') {
+        exec('start "" "C:\\Program Files\\Docker\\Docker\\Docker Desktop.exe"')
+      } else if (process.platform === 'darwin') {
+        exec('open -a Docker')
+      }
+    } catch { /* 忽略啟動錯誤，持續輸詢 */ }
+
+    for (let i = 0; i < 20; i++) {
+      await new Promise(r => setTimeout(r, 3000))
+      try {
+        await runCommand('docker info')
+        updateLoadingStatus('Docker 已就緒')
+        return true
+      } catch {
+        updateLoadingStatus(`正在等待 Docker 啟動... (${(i + 1) * 3}s / 60s)`)
+      }
+    }
+
+    if (splashWindow && !splashWindow.isDestroyed()) splashWindow.hide()
+    await dialog.showMessageBox({
+      type: 'error',
+      buttons: ['確定'],
+      title: 'BruV AI — 啟動失敗',
+      message: 'Docker Desktop 無法在 60 秒內啟動',
+      detail: '請手動開啟 Docker Desktop 後重新啟動 BruV AI。'
+    })
+    app.quit()
+    return false
+  }
+}
+
+/**
+ * Step 3: 執行 docker compose up -d 啟動所有容器服務。
+ * @returns {Promise<boolean>}
+ */
+async function startDockerServices () {
+  updateLoadingStatus('正在啟動容器服務...')
+  try {
+    await new Promise((resolve, reject) => {
+      exec(
+        `docker compose -f "${composePath}" up -d`,
+        { timeout: 120000 },
+        (err) => { if (err) reject(err); else resolve() }
+      )
+    })
+    return true
+  } catch (err) {
+    if (splashWindow && !splashWindow.isDestroyed()) splashWindow.hide()
+    await dialog.showMessageBox({
+      type: 'error',
+      buttons: ['確定'],
+      title: 'BruV AI — 服務啟動失敗',
+      message: '無法啟動容器服務',
+      detail: String(err?.message ?? err).slice(0, 500)
+    })
+    app.quit()
+    return false
+  }
 }
 
 // ── 建立主視窗 ────────────────────────────────────────────────────────────────
@@ -104,6 +213,7 @@ function createMain () {
   // 移除原生選單列（改由前端 TitleBar 處理）
   Menu.setApplicationMenu(null)
   setupKeyboardShortcuts()
+  setupContextMenu()
   setupIPC()
 
   // 記錄初始 bundle hash，並啟動自動更新偵測
@@ -122,6 +232,75 @@ function setupIPC () {
   ipcMain.on('win-minimize',     () => mainWindow?.minimize())
   ipcMain.on('win-maximize',     () => mainWindow?.isMaximized() ? mainWindow.unmaximize() : mainWindow.maximize())
   ipcMain.on('win-quit',         () => app.quit())
+}
+
+// ── 右鍵選單（原生實作）─────────────────────────────────────────────────────
+function setupContextMenu () {
+  if (!mainWindow) return
+  mainWindow.webContents.on('context-menu', (event, params) => {
+    const menu = new Menu()
+    const wc = mainWindow.webContents
+
+    // 連結相關
+    if (params.linkURL) {
+      menu.append(new MenuItem({
+        label: '在瀏覽器中開啟連結',
+        click: () => shell.openExternal(params.linkURL)
+      }))
+      menu.append(new MenuItem({
+        label: '複製連結位址',
+        click: () => clipboard.writeText(params.linkURL)
+      }))
+      menu.append(new MenuItem({ type: 'separator' }))
+    }
+
+    // 圖片相關
+    if (params.hasImageContents && params.srcURL) {
+      menu.append(new MenuItem({
+        label: '複製圖片',
+        click: () => wc.copyImageAt(params.x, params.y)
+      }))
+      menu.append(new MenuItem({
+        label: '複製圖片網址',
+        click: () => clipboard.writeText(params.srcURL)
+      }))
+      menu.append(new MenuItem({
+        label: '圖片另存為…',
+        click: () => wc.downloadURL(params.srcURL)
+      }))
+      menu.append(new MenuItem({ type: 'separator' }))
+    }
+
+    // 拼字建議
+    if (params.misspelledWord && params.dictionarySuggestions?.length) {
+      for (const suggestion of params.dictionarySuggestions.slice(0, 5)) {
+        menu.append(new MenuItem({
+          label: suggestion,
+          click: () => wc.replaceMisspelling(suggestion)
+        }))
+      }
+      menu.append(new MenuItem({ type: 'separator' }))
+    }
+
+    // 編輯操作
+    if (params.editFlags.canCut && params.selectionText) {
+      menu.append(new MenuItem({ label: '剪下', role: 'cut' }))
+    }
+    if (params.editFlags.canCopy && params.selectionText) {
+      menu.append(new MenuItem({ label: '複製', role: 'copy' }))
+    }
+    if (params.editFlags.canPaste) {
+      menu.append(new MenuItem({ label: '貼上', role: 'paste' }))
+      menu.append(new MenuItem({ label: '貼上為純文字', role: 'pasteAndMatchStyle' }))
+    }
+    if (params.editFlags.canSelectAll) {
+      menu.append(new MenuItem({ label: '全選', role: 'selectAll' }))
+    }
+
+    if (menu.items.length > 0) {
+      menu.popup({ window: mainWindow })
+    }
+  })
 }
 
 // ── 鍵盤快捷鍵（在 webContents 層攔截，不需可見選單）────────────────────────
@@ -186,6 +365,7 @@ function stopUpdateCheck () {
 
 // ── 輪詢後端 health ───────────────────────────────────────────────────────────
 async function waitForBackend (retries = 0) {
+  if (retries === 0) updateLoadingStatus('正在等待後端服務啟動...')
   try {
     await new Promise((resolve, reject) => {
       http.get(BACKEND_HEALTH_URL, (res) => {
@@ -206,21 +386,309 @@ async function waitForBackend (retries = 0) {
   }
 }
 
+// ── Setup Wizard ──────────────────────────────────────────────────────────────
+function createSetupWizard () {
+  setupWizardWindow = new BrowserWindow({
+    width: 800,
+    height: 600,
+    resizable: false,
+    frame: true,
+    title: 'BruV AI — 初始設定',
+    webPreferences: {
+      preload: path.join(__dirname, 'setup-preload.js'),
+      nodeIntegration: false,
+      contextIsolation: true,
+    }
+  })
+  setupWizardWindow.loadFile(path.join(__dirname, 'setup-wizard.html'))
+  Menu.setApplicationMenu(null)
+
+  setupWizardWindow.on('closed', () => {
+    setupWizardWindow = null
+  })
+}
+
+/**
+ * 讀取 .env 檔案，更新指定 key，寫回。
+ * 不存在的 key 會新增在末尾。
+ */
+function updateEnvFile (envPath, updates) {
+  let lines = []
+  try {
+    lines = fs.readFileSync(envPath, 'utf8').split('\n')
+  } catch { /* 檔案不存在，從空白開始 */ }
+
+  const keyMap = new Map()
+  const order  = []
+  for (const line of lines) {
+    const m = line.match(/^([A-Z_][A-Z0-9_]*)=(.*)$/)
+    if (m) {
+      keyMap.set(m[1], m[2])
+      order.push(m[1])
+    } else {
+      order.push(null) // 保留空行、註解
+    }
+  }
+
+  // 套用更新
+  for (const [k, v] of Object.entries(updates)) {
+    if (v === undefined || v === null) continue
+    if (!keyMap.has(k)) order.push(k)
+    keyMap.set(k, String(v))
+  }
+
+  const out = order.map(k => {
+    if (k === null) return ''      // 空行/註解（簡化：以空行替代）
+    return `${k}=${keyMap.get(k)}`
+  }).join('\n')
+  fs.writeFileSync(envPath, out, 'utf8')
+}
+
+/**
+ * 注冊 Setup Wizard 專用的 IPC handlers。
+ * 必須在 app.whenReady() 之後呼叫。
+ */
+function setupSetupIPC (setupCompleteFile) {
+  // ── Step 2: 檢測 Docker 是否安裝 ──
+  ipcMain.handle('setup:checkDocker', async () => {
+    try {
+      const out = await runCommand('docker --version', 8000)
+      return { installed: true, version: out.trim() }
+    } catch {
+      return { installed: false }
+    }
+  })
+
+  // ── Step 3: 檢測 Docker daemon 是否運行 ──
+  ipcMain.handle('setup:checkDockerRunning', async () => {
+    try {
+      await runCommand('docker info', 10000)
+      return { running: true }
+    } catch {
+      return { running: false }
+    }
+  })
+
+  // ── Step 3: 啟動 Docker Desktop 並輪詢等待 ──
+  ipcMain.handle('setup:startDockerDesktop', async (event) => {
+    try {
+      if (process.platform === 'win32') {
+        exec('start "" "C:\\Program Files\\Docker\\Docker\\Docker Desktop.exe"')
+      } else if (process.platform === 'darwin') {
+        exec('open -a Docker')
+      } else {
+        exec('systemctl --user start docker-desktop')
+      }
+    } catch { /* 忽略啟動錯誤，持續輪詢 */ }
+
+    for (let i = 0; i < 20; i++) {
+      await new Promise(r => setTimeout(r, 3000))
+      try {
+        await runCommand('docker info', 8000)
+        if (!event.sender.isDestroyed()) {
+          event.sender.send('setup:dockerProgress', 'Docker 已就緒')
+        }
+        return { success: true }
+      } catch {
+        if (!event.sender.isDestroyed()) {
+          event.sender.send('setup:dockerProgress',
+            `正在等待 Docker 啟動... (${(i + 1) * 3}s / 60s)`)
+        }
+      }
+    }
+    return { success: false, error: 'Docker 無法在 60 秒內啟動，請手動開啟 Docker Desktop 後重試。' }
+  })
+
+  // ── Step 4: 檢測 Ollama 是否安裝 ──
+  ipcMain.handle('setup:checkOllama', async () => {
+    try {
+      const out = await runCommand('ollama --version', 8000)
+      return { installed: true, version: out.trim() }
+    } catch {
+      return { installed: false }
+    }
+  })
+
+  // ── Step 4: 下載 Ollama 模型（流式進度） ──
+  ipcMain.handle('setup:pullOllamaModel', (event, modelName) => {
+    return new Promise((resolve) => {
+      const child = spawn('ollama', ['pull', modelName], {
+        stdio: ['ignore', 'pipe', 'pipe']
+      })
+      let currentPercent = 0
+
+      const handleData = (data) => {
+        if (event.sender.isDestroyed()) return
+        // 移除 ANSI 色碼、Carriage Return
+        const text = data.toString()
+          .replace(/\x1B\[[0-9;]*m/g, '')
+          .replace(/\r/g, '\n')
+        const lines = text.split('\n').filter(l => l.trim())
+
+        for (const line of lines) {
+          const pctMatch = line.match(/(\d+)%/)
+          if (pctMatch) currentPercent = parseInt(pctMatch[1])
+          const isDone = line.trim().toLowerCase() === 'success'
+          event.sender.send('setup:ollamaProgress', {
+            model: modelName,
+            line: line.trim(),
+            percent: pctMatch ? currentPercent : null,
+            done: isDone
+          })
+        }
+      }
+
+      child.stdout.on('data', handleData)
+      child.stderr.on('data', handleData)
+
+      child.on('close', (code) => {
+        resolve({ success: code === 0 })
+      })
+      child.on('error', (err) => {
+        resolve({ success: false, error: err.message })
+      })
+    })
+  })
+
+  // ── Step 5: 儲存環境變數設定 ──
+  ipcMain.handle('setup:saveEnvSettings', async (_, settings) => {
+    const envPath = path.join(resourcePath, '.env')
+    const updates = {}
+    if (settings.adminEmail)    updates.ADMIN_EMAIL    = settings.adminEmail
+    if (settings.adminPassword) updates.ADMIN_PASSWORD = settings.adminPassword
+    if (settings.anthropicApiKey !== undefined) updates.ANTHROPIC_API_KEY = settings.anthropicApiKey
+    if (settings.openaiApiKey   !== undefined) updates.OPENAI_API_KEY     = settings.openaiApiKey
+    if (settings.groqApiKey     !== undefined) updates.GROQ_API_KEY       = settings.groqApiKey
+
+    try {
+      updateEnvFile(envPath, updates)
+      return { success: true }
+    } catch (err) {
+      return { success: false, error: err.message }
+    }
+  })
+
+  // ── Step 6: 啟動容器服務 ──
+  ipcMain.handle('setup:startServices', async () => {
+    try {
+      await new Promise((resolve, reject) => {
+        exec(
+          `docker compose -f "${composePath}" up -d`,
+          { timeout: 120000 },
+          (err) => { if (err) reject(err); else resolve() }
+        )
+      })
+      return { success: true }
+    } catch (err) {
+      return { success: false, error: String(err?.message ?? err).slice(0, 300) }
+    }
+  })
+
+  // ── Step 6: 輪詢後端 health（最多 90 秒） ──
+  ipcMain.handle('setup:waitForBackend', async (event) => {
+    for (let i = 0; i < 45; i++) {
+      await new Promise(r => setTimeout(r, 2000))
+      try {
+        const ok = await new Promise((resolve, reject) => {
+          http.get(BACKEND_HEALTH_URL, (res) => {
+            if (res.statusCode === 200) resolve(true)
+            else reject(new Error(`HTTP ${res.statusCode}`))
+            res.resume()
+          }).on('error', reject)
+        })
+        if (ok) return { success: true }
+      } catch {
+        if (!event.sender.isDestroyed()) {
+          event.sender.send('setup:backendProgress',
+            `等待後端回應... (${(i + 1) * 2}s / 90s)`)
+        }
+      }
+    }
+    return { success: false, error: '後端服務無法在 90 秒內啟動' }
+  })
+
+  // ── Step 6: 完成設定，寫入標記，開啟主視窗 ──
+  ipcMain.handle('setup:completeSetup', async () => {
+    try {
+      fs.writeFileSync(
+        setupCompleteFile,
+        JSON.stringify({ completedAt: new Date().toISOString() }),
+        'utf8'
+      )
+    } catch (err) {
+      return { success: false, error: err.message }
+    }
+
+    // 開啟主視窗（後端此時應已就緒）
+    createMain()
+
+    // 稍後關閉精靈視窗（讓主視窗先出現）
+    setTimeout(() => {
+      if (setupWizardWindow && !setupWizardWindow.isDestroyed()) {
+        setupWizardWindow.close()
+        setupWizardWindow = null
+      }
+    }, 800)
+
+    return { success: true }
+  })
+
+  // ── 通用：開啟外部連結 ──
+  ipcMain.handle('setup:openExternal', (_, url) => {
+    shell.openExternal(url)
+  })
+}
+
 // ── App 生命週期 ──────────────────────────────────────────────────────────────
 app.whenReady().then(() => {
-  createSplash()
-  waitForBackend()
+  const setupCompleteFile = path.join(app.getPath('userData'), 'setup-complete.json')
+
+  // 注冊 setup IPC handlers（精靈視窗需要）
+  setupSetupIPC(setupCompleteFile)
+
+  const setupComplete = fs.existsSync(setupCompleteFile)
+
+  if (!setupComplete) {
+    // 首次執行：開啟設定精靈
+    createSetupWizard()
+  } else {
+    // 已設定完成：走正常啟動流程
+    createSplash()
+    splashWindow.webContents.once('did-finish-load', async () => {
+      if (!await checkDocker()) return
+      if (!await ensureDockerRunning()) return
+      if (!await startDockerServices()) return
+      waitForBackend()
+    })
+  }
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
-      createSplash()
-      waitForBackend()
+      if (!fs.existsSync(setupCompleteFile)) {
+        createSetupWizard()
+      } else {
+        createSplash()
+        waitForBackend()
+      }
     }
   })
 })
 
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit()
+app.on('window-all-closed', async () => {
+  if (process.platform === 'darwin') return
+
+  const { response } = await dialog.showMessageBox({
+    type: 'question',
+    buttons: ['停止服務並退出', '僅關閉視窗'],
+    defaultId: 0,
+    title: 'BruV AI',
+    message: '是否同時停止後台服務？',
+    detail: '停止服務將關閉所有 Docker 容器，下次啟動需要重新等待服務啟動。'
+  })
+  if (response === 0) {
+    exec(`docker compose -f "${composePath}" down`)
+  }
+  app.quit()
 })
 
 // 禁止導航到非 localhost 頁面（安全防護）

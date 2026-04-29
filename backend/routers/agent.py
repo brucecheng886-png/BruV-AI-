@@ -178,22 +178,92 @@ def _run_agent_task(task_id: str, instruction: str, model: str):
             agent=agent,
             tools=tools,
             verbose=False,
-            max_iterations=8,
+            max_iterations=12,
             early_stopping_method="generate",
             handle_parsing_errors=True,
         )
 
+        # ── C3：成本上限檢查 + Self-Critique準備 ──────────────
+        from prompts import AGENT_REFLECTION_PROMPT
+        _quota_usd = 0.0
+        _used_usd_this_month = 0.0
+        try:
+            import psycopg2
+            from urllib.parse import urlparse
+            _u = urlparse(settings.DATABASE_URL.replace("+asyncpg", ""))
+            with psycopg2.connect(
+                host=_u.hostname, port=_u.port or 5432,
+                user=_u.username, password=_u.password,
+                dbname=_u.path.lstrip("/"),
+            ) as _conn:
+                with _conn.cursor() as cur:
+                    cur.execute("SELECT value FROM system_settings WHERE key='monthly_quota_usd'")
+                    _row = cur.fetchone()
+                    if _row and _row[0]:
+                        try:
+                            _quota_usd = float(_row[0])
+                        except Exception:
+                            _quota_usd = 0.0
+                    if _quota_usd > 0:
+                        cur.execute(
+                            "SELECT COALESCE(SUM(cost_usd),0) FROM llm_usage_log "
+                            "WHERE created_at >= date_trunc('month', now())"
+                        )
+                        _used_usd_this_month = float(cur.fetchone()[0] or 0.0)
+        except Exception as _qe:
+            logger.warning("Agent quota check skipped: %s", _qe)
+        if _quota_usd > 0 and _used_usd_this_month >= _quota_usd:
+            raise RuntimeError(
+                f"本月 LLM 成本 ${_used_usd_this_month:.2f} 已達限額 ${_quota_usd:.2f}，Agent 任務中止"
+            )
+
         # 收集 steps（LangChain callback）
         from langchain.callbacks.base import BaseCallbackHandler
 
+        # C3：每 N=3 個 action 插入一次 reflection step（非阻塞，僅記錄）
+        REFLECT_EVERY_N = 3
+
         class StepCallback(BaseCallbackHandler):
+            def __init__(self):
+                self._action_count = 0
+
             def on_agent_action(self, action, **kwargs):
+                self._action_count += 1
                 steps.append({
                     "type": "action",
                     "tool": action.tool,
                     "input": str(action.tool_input)[:500],
                 })
                 _save_status("running")
+                # 每 N 步評估一次
+                if self._action_count > 0 and self._action_count % REFLECT_EVERY_N == 0:
+                    try:
+                        _steps_log = "\n".join(
+                            f"- {s.get('type')}: {s.get('tool') or ''} {s.get('input') or s.get('output') or ''}"
+                            for s in steps[-(REFLECT_EVERY_N * 2):]
+                        )
+                        _ref_prompt = AGENT_REFLECTION_PROMPT(instruction, _steps_log)
+                        _resp = llm.invoke(_ref_prompt)
+                        _txt = getattr(_resp, "content", str(_resp))
+                        # 取中間 JSON
+                        _jt = _txt.strip()
+                        if "```" in _jt:
+                            _jt = _jt.split("```")[1]
+                            if _jt.startswith("json"):
+                                _jt = _jt[4:]
+                        _jt = _jt.strip()
+                        try:
+                            _judge = json.loads(_jt)
+                        except Exception:
+                            _judge = {"raw": _txt[:500]}
+                        steps.append({
+                            "type": "reflection",
+                            "step_index": self._action_count,
+                            "judge": _judge,
+                        })
+                        _save_status("running")
+                    except Exception as _re:
+                        logger.warning("Agent self-critique failed: %s", _re)
 
             def on_tool_end(self, output, **kwargs):
                 steps.append({

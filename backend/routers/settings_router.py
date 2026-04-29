@@ -63,7 +63,10 @@ def _mask(key: str) -> str:
 async def get_llm_runtime_config(db: AsyncSession) -> dict:
     """
     從 system_settings 讀取 LLM 執行時設定。
-    回傳 {provider, model, api_key}，若 DB 無設定回傳空 dict。
+    回傳 {provider, model, model_id, api_key}，若 DB 無設定回傳空 dict。
+
+    `model_id` 為 system_settings 指定的 cloud_llm_model 在 llm_models 表中的 ID（若存在），
+    供呼叫端二次 lookup model-level 的 base_url / api_key / 治理欄位。
     """
     result = await db.execute(
         select(SystemSetting).where(SystemSetting.key.in_(_LLM_KEYS))
@@ -77,7 +80,28 @@ async def get_llm_runtime_config(db: AsyncSession) -> dict:
     model    = rows.get("cloud_llm_model", "").strip()
     api_key  = rows.get(f"{provider}_api_key", "").strip()
 
-    return {"provider": provider, "model": model or None, "api_key": api_key or None}
+    # 二次查詢 llm_models 取得 model_id（不影響原 fallback key 行為）
+    model_id: str | None = None
+    if model:
+        from models import LLMModel as _LLMModel
+        try:
+            row = (await db.execute(
+                select(_LLMModel.id).where(
+                    _LLMModel.name == model,
+                    _LLMModel.provider == provider,
+                ).limit(1)
+            )).first()
+            if row:
+                model_id = row[0]
+        except Exception:
+            pass
+
+    return {
+        "provider": provider,
+        "model": model or None,
+        "model_id": model_id,
+        "api_key": api_key or None,
+    }
 
 
 # ── Schemas ───────────────────────────────────────────────────────────────────
@@ -586,6 +610,8 @@ _CHAT_DEFAULTS = {
     "chat_history_rounds": "10",
     "chat_system_prompt":  "",
     "doc_analysis_model":  "",
+    "chat_reflection_enabled": "false",
+    "prompt_template_auto_match": "false",
 }
 _CHAT_KEYS = list(_CHAT_DEFAULTS.keys())
 
@@ -596,6 +622,8 @@ class ChatSettingsOut(BaseModel):
     chat_history_rounds: int
     chat_system_prompt: str
     doc_analysis_model: str = ""
+    chat_reflection_enabled: bool = False
+    prompt_template_auto_match: bool = False
 
 
 class ChatSettingsIn(BaseModel):
@@ -604,6 +632,8 @@ class ChatSettingsIn(BaseModel):
     chat_history_rounds: int = 10
     chat_system_prompt: str = ""
     doc_analysis_model: str = ""
+    chat_reflection_enabled: bool = False
+    prompt_template_auto_match: bool = False
 
 
 async def get_chat_runtime_config(db: AsyncSession) -> dict:
@@ -617,6 +647,7 @@ async def get_chat_runtime_config(db: AsyncSession) -> dict:
         "max_tokens":     int(rows.get("chat_max_tokens",       _CHAT_DEFAULTS["chat_max_tokens"])),
         "history_rounds": int(rows.get("chat_history_rounds",   _CHAT_DEFAULTS["chat_history_rounds"])),
         "system_prompt":  rows.get("chat_system_prompt",        _CHAT_DEFAULTS["chat_system_prompt"]),
+        "prompt_template_auto_match": str(rows.get("prompt_template_auto_match", _CHAT_DEFAULTS["prompt_template_auto_match"])).strip().lower() in ("1", "true", "on", "yes"),
     }
 
 
@@ -635,6 +666,8 @@ async def get_chat_settings(
         chat_history_rounds=int(rows.get("chat_history_rounds", _CHAT_DEFAULTS["chat_history_rounds"])),
         chat_system_prompt=rows.get("chat_system_prompt",       _CHAT_DEFAULTS["chat_system_prompt"]),
         doc_analysis_model=rows.get("doc_analysis_model",       _CHAT_DEFAULTS["doc_analysis_model"]),
+        chat_reflection_enabled=str(rows.get("chat_reflection_enabled", _CHAT_DEFAULTS["chat_reflection_enabled"])).strip().lower() in ("1", "true", "on", "yes"),
+        prompt_template_auto_match=str(rows.get("prompt_template_auto_match", _CHAT_DEFAULTS["prompt_template_auto_match"])).strip().lower() in ("1", "true", "on", "yes"),
     )
 
 
@@ -657,6 +690,8 @@ async def save_chat_settings(
         "chat_history_rounds": str(body.chat_history_rounds),
         "chat_system_prompt":  body.chat_system_prompt,
         "doc_analysis_model":  body.doc_analysis_model,
+        "chat_reflection_enabled": "true" if body.chat_reflection_enabled else "false",
+        "prompt_template_auto_match": "true" if body.prompt_template_auto_match else "false",
     }
     for k, v in updates.items():
         existing = await db.get(SystemSetting, k)

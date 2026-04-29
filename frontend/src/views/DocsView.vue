@@ -270,6 +270,15 @@
             ><Link :size="14" :stroke-width="1.5" /></el-button>
           </el-tooltip>
 
+          <el-tooltip content="智慧匯入（AI 分析）" placement="bottom">
+            <el-button
+              type="primary"
+              plain
+              circle
+              @click="openSmartImport"
+            ><Sparkles :size="14" :stroke-width="1.5" /></el-button>
+          </el-tooltip>
+
           <!-- 全選 checkbox（匯入右側，Gmail 風格） -->
           <div v-if="displayedDocs.length > 0 && !searchMode" class="gmail-select">
             <button
@@ -970,6 +979,14 @@
             <el-input-number v-model="kbForm.default_top_k" :min="1" :max="50" controls-position="right" style="width:160px;" />
             <span style="margin-left:8px;font-size:12px;color:#94a3b8;">留空使用全域設定</span>
           </el-form-item>
+          <el-form-item label="AI 助理指令">
+            <el-input
+              v-model="kbForm.agent_prompt"
+              type="textarea"
+              :rows="4"
+              placeholder="當使用者在此知識庫對話時，AI 將套用此 system prompt（留空使用預設）"
+            />
+          </el-form-item>
         </div>
       </el-form>
       <template #footer>
@@ -1048,6 +1065,186 @@
         <el-button type="primary" @click="importResultDialog.show = false">確定</el-button>
       </template>
     </el-dialog>
+
+    <!-- 智慧匯入：URL 輸入 Dialog -->
+    <el-dialog
+      v-model="smartInputDialog.show"
+      title="智慧匯入（AI 分析）"
+      width="600px"
+      :close-on-click-modal="false"
+    >
+      <div class="smart-input">
+        <div class="smart-input__hint">
+          <Sparkles :size="14" :stroke-width="1.6" />
+          每行一個 URL；AI 會自動產生標題、摘要、標籤、推薦知識庫。
+        </div>
+        <el-input
+          v-model="smartInputDialog.urlsText"
+          type="textarea"
+          :autosize="{ minRows: 8, maxRows: 16 }"
+          placeholder="https://example.com/article-1&#10;https://example.com/article-2"
+        />
+        <div class="smart-input__excel">
+          <input
+            ref="smartInputFileRef"
+            type="file"
+            accept=".xlsx"
+            style="display:none"
+            @change="handleSmartUrlsFromExcel"
+          />
+          <el-button size="small" plain @click="smartInputFileRef?.click()">
+            <FileSpreadsheet :size="13" :stroke-width="1.5" style="margin-right:4px;" />
+            從 Excel 載入 URL
+          </el-button>
+          <span class="smart-input__excel-hint">支援欄位：url / link / 連結 / 網址</span>
+        </div>
+      </div>
+      <template #footer>
+        <el-button @click="smartInputDialog.show = false">取消</el-button>
+        <el-button type="primary" :loading="smartLoading" @click="runSmartImport">
+          <span v-if="smartLoading">AI 正在分析中…</span>
+          <span v-else>開始分析</span>
+        </el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 智慧匯入：預覽 Dialog -->
+    <el-dialog
+      v-model="smartPreviewDialog.show"
+      title="智慧匯入預覽"
+      width="900px"
+      :close-on-click-modal="false"
+      class="smart-preview-dialog"
+    >
+      <div class="smart-preview__head">
+        <el-checkbox
+          :model-value="smartAllChecked"
+          :indeterminate="smartIndeterminate"
+          @change="smartToggleAll"
+        >
+          全選
+        </el-checkbox>
+        <span class="smart-preview__count">
+          已選 {{ smartCheckedCount }} 篇 / 共 {{ smartItems.length }} 篇
+        </span>
+      </div>
+
+      <div class="smart-preview__list">
+        <div
+          v-for="(item, idx) in smartItems"
+          :key="idx"
+          class="smart-row"
+          :class="{ 'smart-row--error': !!item.error, 'smart-row--expanded': smartExpandedIdx === idx }"
+        >
+          <div class="smart-row__head" @click="smartToggleExpand(idx)">
+            <el-checkbox
+              v-model="item.checked"
+              :disabled="!!item.error"
+              @click.stop
+            />
+            <div class="smart-row__main">
+              <div class="smart-row__title">
+                {{ item.title || item.url }}
+              </div>
+              <div class="smart-row__meta">
+                <span v-if="item.recommended_kb_id" class="smart-badge">
+                  推薦：{{ smartKbName(item.recommended_kb_id) }}
+                </span>
+                <el-tag
+                  v-for="t in (item.tags || []).slice(0, 5)"
+                  :key="t"
+                  size="small"
+                  effect="plain"
+                  class="smart-tag"
+                >{{ t }}</el-tag>
+                <span v-if="item.error" class="smart-row__error">
+                  <X :size="12" :stroke-width="2" /> {{ item.error }}
+                </span>
+              </div>
+            </div>
+            <ChevronDown
+              :size="16"
+              :stroke-width="1.5"
+              class="smart-row__arrow"
+              :class="{ 'smart-row__arrow--up': smartExpandedIdx === idx }"
+            />
+          </div>
+
+          <div v-if="smartExpandedIdx === idx && !item.error" class="smart-row__edit">
+            <div class="smart-edit__grid">
+              <div class="smart-edit__field">
+                <label>標題</label>
+                <el-input v-model="item.title" size="small" />
+              </div>
+              <div class="smart-edit__field">
+                <label>知識庫</label>
+                <el-select
+                  v-model="item.knowledge_base_id"
+                  size="small"
+                  placeholder="不指定"
+                  clearable
+                  style="width:100%"
+                >
+                  <el-option
+                    v-for="kb in smartKbs"
+                    :key="kb.id"
+                    :label="kb.name"
+                    :value="kb.id"
+                  />
+                </el-select>
+                <div v-if="item.recommended_kb_reason" class="smart-edit__hint">
+                  AI 建議理由：{{ item.recommended_kb_reason }}
+                </div>
+              </div>
+              <div class="smart-edit__field smart-edit__field--full">
+                <label>摘要</label>
+                <el-input
+                  v-model="item.description"
+                  type="textarea"
+                  :autosize="{ minRows: 2, maxRows: 4 }"
+                  size="small"
+                />
+              </div>
+              <div class="smart-edit__field smart-edit__field--full">
+                <label>標籤</label>
+                <div class="smart-edit__tags">
+                  <el-tag
+                    v-for="t in item.tags"
+                    :key="t"
+                    closable
+                    size="small"
+                    @close="smartRemoveTag(item, t)"
+                  >{{ t }}</el-tag>
+                  <el-input
+                    v-model="item._tagInput"
+                    size="small"
+                    placeholder="輸入後 Enter 新增"
+                    style="width:160px;"
+                    @keyup.enter="smartAddTag(item)"
+                  />
+                </div>
+              </div>
+              <div v-if="item.cover_image_url" class="smart-edit__field smart-edit__field--full">
+                <label>封面圖</label>
+                <img :src="item.cover_image_url" class="smart-edit__cover" referrerpolicy="no-referrer" />
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <template #footer>
+        <el-button @click="smartPreviewDialog.show = false">取消</el-button>
+        <el-button
+          type="primary"
+          :loading="smartConfirming"
+          :disabled="smartCheckedCount === 0"
+          @click="confirmSmartImport"
+        >
+          確認匯入（{{ smartCheckedCount }}）
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -1057,7 +1254,7 @@ import {
   Upload, Link, LayoutGrid, List, Share2, Trash2, Search, Plus, Tag,
   CheckSquare, X, Settings2, Check, MoreHorizontal, FolderInput, RefreshCw,
   Eye, Loader2, FileText, FileSpreadsheet, Globe, ChevronRight, ChevronDown,
-  Database, FileStack, Copy, Zap, SendHorizontal
+  Database, FileStack, Copy, Zap, SendHorizontal, Sparkles
 } from 'lucide-vue-next'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { docsApi, kbApi, tagsApi, wikiApi } from '../api/index.js'
@@ -1355,6 +1552,7 @@ const kbForm = ref({
   embedding_model: '', embedding_provider: 'ollama',
   chunk_size: null, language: 'auto',
   rerank_enabled: null, default_top_k: null,
+  agent_prompt: '',
 })
 const showKbAdvanced = ref(false)
 const embeddingModels = ref([])
@@ -1374,6 +1572,155 @@ const importResultDialog = ref({
   skipped: 0,
   skippedItems: [],
 })
+
+// 智慧匯入（AI 分析）
+const smartInputDialog = ref({ show: false, urlsText: '' })
+const smartInputFileRef = ref(null)
+const smartLoading = ref(false)
+const smartPreviewDialog = ref({ show: false })
+const smartItems = ref([])           // [{url,title,description,tags,cover_image_url,knowledge_base_id,recommended_kb_id,recommended_kb_reason,error,checked,_tagInput}]
+const smartKbs = ref([])             // [{id,name,description}]
+const smartExpandedIdx = ref(-1)
+const smartConfirming = ref(false)
+const smartNewTagInput = ref('')
+
+const smartSelectableCount = computed(() => smartItems.value.filter(it => !it.error).length)
+const smartCheckedCount = computed(() => smartItems.value.filter(it => it.checked && !it.error).length)
+const smartAllChecked = computed(() =>
+  smartSelectableCount.value > 0 && smartCheckedCount.value === smartSelectableCount.value
+)
+const smartIndeterminate = computed(() =>
+  smartCheckedCount.value > 0 && !smartAllChecked.value
+)
+
+function openSmartImport() {
+  smartInputDialog.value = { show: true, urlsText: '' }
+}
+
+async function handleSmartUrlsFromExcel(e) {
+  const file = e.target.files?.[0]
+  if (!file) return
+  try {
+    if (typeof window.XLSX === 'undefined') {
+      ElMessage.error('Excel 解析模組未載入')
+      return
+    }
+    const buf = await file.arrayBuffer()
+    const wb = window.XLSX.read(buf, { type: 'array' })
+    const ws = wb.Sheets[wb.SheetNames[0]]
+    const rows = window.XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' })
+    if (!rows.length) {
+      ElMessage.warning('Excel 為空')
+      return
+    }
+    const header = rows[0].map(h => String(h || '').trim().toLowerCase())
+    let col = header.findIndex(h => ['url', 'link', '連結', '網址'].includes(h))
+    if (col < 0) col = 0
+    const urls = []
+    for (let i = 1; i < rows.length; i++) {
+      const v = String(rows[i][col] || '').trim()
+      if (v && /^https?:\/\//i.test(v)) urls.push(v)
+    }
+    if (!urls.length) {
+      ElMessage.warning('Excel 中找不到 URL 欄')
+      return
+    }
+    smartInputDialog.value.urlsText = urls.join('\n')
+    ElMessage.success(`已載入 ${urls.length} 筆 URL`)
+  } catch (err) {
+    ElMessage.error('Excel 解析失敗：' + (err?.message || err))
+  } finally {
+    e.target.value = ''
+  }
+}
+
+async function runSmartImport() {
+  const lines = smartInputDialog.value.urlsText
+    .split(/\r?\n/)
+    .map(s => s.trim())
+    .filter(s => s && /^https?:\/\//i.test(s))
+  if (!lines.length) {
+    ElMessage.warning('請輸入至少一個合法 URL')
+    return
+  }
+  if (lines.length > 50) {
+    ElMessage.warning('一次最多 50 筆')
+    return
+  }
+  smartLoading.value = true
+  try {
+    const data = await docsApi.smartImport(lines, selectedKbId.value || null)
+    smartKbs.value = Array.isArray(data?.kbs) ? data.kbs : []
+    smartItems.value = (Array.isArray(data?.items) ? data.items : []).map(it => ({
+      ...it,
+      tags: Array.isArray(it.tags) ? [...it.tags] : [],
+      knowledge_base_id: it.recommended_kb_id || null,
+      checked: !it.error,
+      _tagInput: '',
+    }))
+    smartInputDialog.value.show = false
+    smartPreviewDialog.value = { show: true }
+    smartExpandedIdx.value = -1
+  } catch (err) {
+    ElMessage.error('AI 分析失敗：' + (err?.message || err))
+  } finally {
+    smartLoading.value = false
+  }
+}
+
+function smartToggleAll(val) {
+  for (const it of smartItems.value) {
+    if (!it.error) it.checked = !!val
+  }
+}
+
+function smartToggleExpand(idx) {
+  smartExpandedIdx.value = smartExpandedIdx.value === idx ? -1 : idx
+}
+
+function smartAddTag(item) {
+  const v = (item._tagInput || '').trim()
+  if (!v) return
+  if (!item.tags.includes(v)) item.tags.push(v)
+  item._tagInput = ''
+}
+
+function smartRemoveTag(item, tag) {
+  item.tags = item.tags.filter(t => t !== tag)
+}
+
+function smartKbName(id) {
+  if (!id) return '未指定'
+  return smartKbs.value.find(k => k.id === id)?.name || '未知 KB'
+}
+
+async function confirmSmartImport() {
+  const items = smartItems.value
+    .filter(it => it.checked && !it.error)
+    .map(it => ({
+      url: it.url,
+      title: (it.title || '').trim(),
+      description: (it.description || '').trim(),
+      tags: it.tags || [],
+      cover_image_url: it.cover_image_url || null,
+      knowledge_base_id: it.knowledge_base_id || null,
+    }))
+  if (!items.length) {
+    ElMessage.warning('請至少勾選一筆')
+    return
+  }
+  smartConfirming.value = true
+  try {
+    const data = await docsApi.smartImportConfirm(items)
+    smartPreviewDialog.value.show = false
+    ElMessage.success(`成功 ${data?.queued ?? 0} 篇，失敗 ${data?.failed ?? 0} 篇`)
+    await loadDocs()
+  } catch (err) {
+    ElMessage.error('匯入失敗：' + (err?.message || err))
+  } finally {
+    smartConfirming.value = false
+  }
+}
 
 // Tags
 const tags = ref([])
@@ -1849,6 +2196,7 @@ function openKbDialog(kb) {
       language: kb.language || 'auto',
       rerank_enabled: kb.rerank_enabled ?? null,
       default_top_k: kb.default_top_k ?? null,
+      agent_prompt: kb.agent_prompt || '',
     }
   } else {
     kbForm.value = {
@@ -1856,6 +2204,7 @@ function openKbDialog(kb) {
       embedding_model: '', embedding_provider: 'ollama',
       chunk_size: null, language: 'auto',
       rerank_enabled: null, default_top_k: null,
+      agent_prompt: '',
     }
   }
   showKbAdvanced.value = false
@@ -3480,5 +3829,80 @@ function statusTagType(s) {
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+/* ── 智慧匯入 ───────────────────────────────────────── */
+.smart-input { display:flex; flex-direction:column; gap:12px; }
+.smart-input__hint {
+  display:flex; align-items:center; gap:6px;
+  font-size:12.5px; color:#64748b;
+}
+.smart-input__excel { display:flex; align-items:center; gap:8px; }
+.smart-input__excel-hint { font-size:12px; color:#94a3b8; }
+
+.smart-preview__head {
+  display:flex; align-items:center; gap:14px;
+  padding:0 4px 12px; border-bottom:1px solid #eef2f7;
+}
+.smart-preview__count { font-size:13px; color:#64748b; }
+
+.smart-preview__list { max-height:60vh; overflow:auto; padding:8px 0; }
+
+.smart-row {
+  border:1px solid #eef2f7; border-radius:8px; margin-bottom:8px;
+  background:#fff; transition:background-color .15s, border-color .15s;
+}
+.smart-row:hover { background:#f8fafc; }
+.smart-row--expanded { border-color:#cbd5e1; }
+.smart-row--error { background:#f8f8f8; }
+.smart-row--error .smart-row__title { color:#94a3b8; }
+
+.smart-row__head {
+  display:flex; align-items:flex-start; gap:10px;
+  padding:10px 12px; cursor:pointer;
+}
+.smart-row__main { flex:1; min-width:0; }
+.smart-row__title {
+  font-size:14px; font-weight:600; color:#1e293b;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+.smart-row__meta {
+  display:flex; align-items:center; flex-wrap:wrap; gap:6px;
+  margin-top:6px; font-size:12px; color:#64748b;
+}
+.smart-badge {
+  display:inline-flex; align-items:center; padding:2px 8px;
+  font-size:11.5px; color:#0369a1; background:#e0f2fe;
+  border-radius:10px;
+}
+.smart-tag { font-size:11.5px !important; }
+.smart-row__error {
+  display:inline-flex; align-items:center; gap:4px;
+  color:#dc2626; font-size:12px;
+}
+.smart-row__arrow { color:#94a3b8; transition:transform .15s; flex-shrink:0; }
+.smart-row__arrow--up { transform:rotate(180deg); color:#475569; }
+
+.smart-row__edit {
+  border-top:1px solid #eef2f7;
+  padding:14px 16px;
+  background:#fafbfc;
+  border-radius:0 0 8px 8px;
+}
+.smart-edit__grid {
+  display:grid; grid-template-columns:1fr 1fr; gap:12px 16px;
+}
+.smart-edit__field { display:flex; flex-direction:column; gap:5px; }
+.smart-edit__field--full { grid-column:1 / -1; }
+.smart-edit__field label {
+  font-size:12px; color:#64748b; font-weight:600;
+}
+.smart-edit__hint { font-size:11.5px; color:#94a3b8; margin-top:2px; }
+.smart-edit__tags {
+  display:flex; align-items:center; flex-wrap:wrap; gap:6px;
+}
+.smart-edit__cover {
+  max-width:240px; max-height:140px; object-fit:cover;
+  border-radius:6px; border:1px solid #e2e8f0;
 }
 </style>

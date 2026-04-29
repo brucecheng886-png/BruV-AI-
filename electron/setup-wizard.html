@@ -1,0 +1,1028 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'">
+  <title>BruV AI — 初始設定</title>
+  <style>
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+    :root {
+      --bg:        #0f0f2e;
+      --bg-card:   #1a1a3e;
+      --bg-input:  #12122a;
+      --border:    #2d2d5a;
+      --primary:   #6366f1;
+      --primary-h: #4f52d9;
+      --success:   #10b981;
+      --error:     #ef4444;
+      --warn:      #f59e0b;
+      --text:      #e2e8f0;
+      --text-muted:#94a3b8;
+      --radius:    8px;
+    }
+
+    html, body {
+      width: 800px; height: 600px; overflow: hidden;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, "Microsoft JhengHei", "Segoe UI", sans-serif;
+      font-size: 14px;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+
+    /* ── Step Indicator ─────────────────────────────────────── */
+    .step-indicator {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0;
+      padding: 20px 0 16px;
+    }
+    .si-dot {
+      width: 28px; height: 28px; border-radius: 50%;
+      background: var(--bg-card);
+      border: 2px solid var(--border);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 12px; font-weight: 600; color: var(--text-muted);
+      flex-shrink: 0;
+      transition: background 0.3s, border-color 0.3s, color 0.3s;
+    }
+    .si-dot.active {
+      background: var(--primary);
+      border-color: var(--primary);
+      color: #fff;
+    }
+    .si-dot.done {
+      background: rgba(99,102,241,0.25);
+      border-color: var(--primary);
+      color: var(--primary);
+    }
+    .si-dot.done::after {
+      content: '';
+      display: block;
+      width: 8px; height: 5px;
+      border-left: 2px solid var(--primary);
+      border-bottom: 2px solid var(--primary);
+      transform: rotate(-45deg) translate(1px,-1px);
+    }
+    .si-dot.done span { display: none; }
+    .si-line {
+      width: 48px; height: 2px;
+      background: var(--border);
+      transition: background 0.3s;
+    }
+    .si-line.done { background: var(--primary); }
+
+    /* ── Step Container ─────────────────────────────────────── */
+    .step {
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      padding: 0 56px 24px;
+      height: calc(600px - 80px);
+      overflow-y: auto;
+    }
+    .step.active { display: flex; }
+
+    .step-title {
+      font-size: 22px; font-weight: 700;
+      color: #fff; margin-bottom: 8px; text-align: center;
+    }
+    .step-desc {
+      font-size: 13px; color: var(--text-muted);
+      text-align: center; line-height: 1.7; margin-bottom: 24px;
+    }
+
+    /* ── Buttons ────────────────────────────────────────────── */
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center;
+      gap: 8px; padding: 10px 24px;
+      border-radius: var(--radius); border: none; cursor: pointer;
+      font-size: 13px; font-weight: 600;
+      transition: background 0.2s, opacity 0.2s;
+    }
+    .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+    .btn-primary { background: var(--primary); color: #fff; }
+    .btn-primary:hover:not(:disabled) { background: var(--primary-h); }
+    .btn-secondary {
+      background: transparent; color: var(--text-muted);
+      border: 1.5px solid var(--border);
+    }
+    .btn-secondary:hover:not(:disabled) {
+      border-color: var(--primary); color: var(--text);
+    }
+    .btn-link {
+      background: transparent; color: var(--primary);
+      border: none; text-decoration: underline;
+      padding: 4px 8px; font-size: 12px;
+    }
+    .btn-row {
+      display: flex; gap: 12px; margin-top: 20px;
+      justify-content: center; flex-wrap: wrap;
+    }
+
+    /* ── Status Box ─────────────────────────────────────────── */
+    .status-box {
+      display: flex; align-items: center; gap: 12px;
+      padding: 14px 20px; border-radius: var(--radius);
+      background: var(--bg-card); border: 1.5px solid var(--border);
+      width: 100%; margin-bottom: 12px;
+      min-height: 52px;
+    }
+    .status-icon {
+      width: 20px; height: 20px; border-radius: 50%;
+      flex-shrink: 0; position: relative;
+    }
+    .status-icon.checking {
+      border: 3px solid var(--border);
+      border-top-color: var(--primary);
+      animation: spin 0.9s linear infinite;
+    }
+    .status-icon.success { background: var(--success); }
+    .status-icon.success::after {
+      content: ''; position: absolute;
+      left: 3px; top: 6px;
+      width: 6px; height: 4px;
+      border-left: 2px solid #fff;
+      border-bottom: 2px solid #fff;
+      transform: rotate(-45deg);
+    }
+    .status-icon.error { background: var(--error); }
+    .status-icon.error::before,
+    .status-icon.error::after {
+      content: ''; position: absolute;
+      width: 10px; height: 2px; background: #fff;
+      top: 50%; left: 50%;
+      transform: translate(-50%,-50%) rotate(45deg);
+    }
+    .status-icon.error::after { transform: translate(-50%,-50%) rotate(-45deg); }
+    .status-icon.warn { background: var(--warn); }
+    .status-icon.warn::after {
+      content: ''; position: absolute;
+      left: 7px; top: 3px;
+      width: 2px; height: 8px;
+      background: #fff; border-radius: 1px;
+    }
+    .status-icon.warn::before {
+      content: ''; position: absolute;
+      left: 7px; top: 13px;
+      width: 2px; height: 2px;
+      background: #fff; border-radius: 50%;
+    }
+    .status-icon.idle { background: var(--border); }
+    .status-text { flex: 1; }
+    .status-label { font-size: 13px; font-weight: 600; color: var(--text); }
+    .status-sub {
+      font-size: 12px; color: var(--text-muted); margin-top: 2px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Cards & Lists ──────────────────────────────────────── */
+    .req-list {
+      width: 100%; background: var(--bg-card);
+      border-radius: var(--radius); padding: 16px 20px;
+      margin-bottom: 24px;
+    }
+    .req-item {
+      display: flex; align-items: center; gap: 10px;
+      padding: 6px 0; border-bottom: 1px solid var(--border);
+      font-size: 13px;
+    }
+    .req-item:last-child { border-bottom: none; }
+    .req-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--primary); flex-shrink: 0;
+    }
+
+    /* ── Logo ───────────────────────────────────────────────── */
+    .logo-box {
+      margin: 8px 0 20px;
+      display: flex; flex-direction: column;
+      align-items: center; gap: 6px;
+    }
+    .logo-mark {
+      width: 64px; height: 64px; border-radius: 16px;
+      background: linear-gradient(135deg, #6366f1, #818cf8);
+      display: flex; align-items: center; justify-content: center;
+    }
+    .logo-mark-inner {
+      width: 28px; height: 28px;
+      border: 3px solid #fff; border-radius: 6px;
+      position: relative;
+    }
+    .logo-mark-inner::after {
+      content: ''; position: absolute;
+      left: 5px; top: 5px;
+      width: 12px; height: 12px;
+      background: #fff; border-radius: 3px;
+    }
+    .logo-text { font-size: 24px; font-weight: 800; color: #fff; letter-spacing: -0.5px; }
+    .logo-sub { font-size: 12px; color: var(--text-muted); letter-spacing: 2px; text-transform: uppercase; }
+
+    /* ── Progress Bar ───────────────────────────────────────── */
+    .progress-wrap { width: 100%; margin-top: 8px; }
+    .progress-label {
+      display: flex; justify-content: space-between;
+      font-size: 12px; color: var(--text-muted); margin-bottom: 4px;
+    }
+    .progress-bar {
+      width: 100%; height: 6px; border-radius: 3px;
+      background: var(--border); overflow: hidden;
+    }
+    .progress-fill {
+      height: 100%; border-radius: 3px;
+      background: var(--primary);
+      transition: width 0.3s;
+    }
+
+    /* ── Model Card ─────────────────────────────────────────── */
+    .model-card {
+      width: 100%; background: var(--bg-card);
+      border: 1.5px solid var(--border);
+      border-radius: var(--radius);
+      padding: 14px 18px; margin-bottom: 10px;
+    }
+    .model-header {
+      display: flex; align-items: center;
+      justify-content: space-between; margin-bottom: 8px;
+    }
+    .model-name { font-size: 14px; font-weight: 600; color: var(--text); }
+    .model-size { font-size: 12px; color: var(--text-muted); }
+    .model-tag {
+      font-size: 11px; padding: 2px 8px; border-radius: 99px;
+      font-weight: 600;
+    }
+    .model-tag.pending  { background: rgba(148,163,184,0.15); color: var(--text-muted); }
+    .model-tag.dl       { background: rgba(99,102,241,0.2); color: #818cf8; }
+    .model-tag.done     { background: rgba(16,185,129,0.15); color: var(--success); }
+    .model-tag.error    { background: rgba(239,68,68,0.15); color: var(--error); }
+    .model-tag.skipped  { background: rgba(245,158,11,0.15); color: var(--warn); }
+    .model-log {
+      font-size: 11px; color: var(--text-muted);
+      margin-top: 4px; min-height: 16px;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+
+    /* ── Form Fields ─────────────────────────────────────────── */
+    .field-group {
+      width: 100%; margin-bottom: 16px;
+    }
+    .field-label {
+      display: block; font-size: 12px; font-weight: 600;
+      color: var(--text-muted); margin-bottom: 6px; letter-spacing: 0.5px;
+    }
+    .field-input {
+      width: 100%; padding: 10px 14px;
+      background: var(--bg-input); border: 1.5px solid var(--border);
+      border-radius: var(--radius); color: var(--text); font-size: 13px;
+      outline: none; transition: border-color 0.2s;
+      -webkit-appearance: none;
+    }
+    .field-input:focus { border-color: var(--primary); }
+    .field-input.invalid { border-color: var(--error); }
+    .field-hint { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
+    .field-error { font-size: 11px; color: var(--error); margin-top: 4px; display: none; }
+
+    /* ── Toggle ──────────────────────────────────────────────── */
+    .toggle-row {
+      display: flex; align-items: center;
+      justify-content: space-between; width: 100%;
+      background: var(--bg-card); border: 1.5px solid var(--border);
+      border-radius: var(--radius); padding: 12px 16px;
+      margin-bottom: 16px;
+    }
+    .toggle-label { font-size: 13px; font-weight: 600; }
+    .toggle-sub { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+    .toggle-switch { position: relative; width: 44px; height: 24px; flex-shrink: 0; }
+    .toggle-switch input { opacity: 0; width: 0; height: 0; }
+    .toggle-track {
+      position: absolute; inset: 0;
+      background: var(--border); border-radius: 12px;
+      cursor: pointer; transition: background 0.2s;
+    }
+    .toggle-track::before {
+      content: ''; position: absolute;
+      width: 18px; height: 18px; border-radius: 50%;
+      background: #fff; top: 3px; left: 3px;
+      transition: transform 0.2s;
+    }
+    .toggle-switch input:checked + .toggle-track { background: var(--primary); }
+    .toggle-switch input:checked + .toggle-track::before { transform: translateX(20px); }
+
+    /* ── Completion ──────────────────────────────────────────── */
+    .completion-steps { width: 100%; margin-bottom: 20px; }
+    .cstep {
+      display: flex; align-items: center; gap: 12px;
+      padding: 10px 0; border-bottom: 1px solid var(--border);
+    }
+    .cstep:last-child { border-bottom: none; }
+    .cstep-icon { width: 20px; height: 20px; flex-shrink: 0; }
+    .cstep-text { font-size: 13px; }
+    .cstep-idle .cstep-icon { border-radius: 50%; border: 2px solid var(--border); }
+    .cstep-running .cstep-icon {
+      border-radius: 50%;
+      border: 3px solid var(--border);
+      border-top-color: var(--primary);
+      animation: spin 0.9s linear infinite;
+    }
+    .cstep-done .cstep-icon {
+      border-radius: 50%; background: var(--success);
+      position: relative;
+    }
+    .cstep-done .cstep-icon::after {
+      content: ''; position: absolute;
+      left: 3px; top: 5px;
+      width: 6px; height: 4px;
+      border-left: 2px solid #fff;
+      border-bottom: 2px solid #fff;
+      transform: rotate(-45deg);
+    }
+    .cstep-error .cstep-icon { border-radius: 50%; background: var(--error); }
+    .cstep-text .label { font-weight: 600; }
+    .cstep-text .sub { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+
+    /* ── Warning Banner ──────────────────────────────────────── */
+    .warn-banner {
+      width: 100%; background: rgba(245,158,11,0.1);
+      border: 1.5px solid rgba(245,158,11,0.4);
+      border-radius: var(--radius); padding: 10px 14px;
+      font-size: 12px; color: var(--warn); margin-bottom: 12px;
+      display: none;
+    }
+    .warn-banner.visible { display: block; }
+
+    /* ── API key section ─────────────────────────────────────── */
+    .api-section { width: 100%; display: none; }
+    .api-section.visible { display: block; }
+  </style>
+</head>
+<body>
+
+<!-- Step Indicator -->
+<div class="step-indicator" id="step-indicator">
+  <div class="si-dot active" id="dot-1"><span>1</span></div>
+  <div class="si-line" id="line-1"></div>
+  <div class="si-dot" id="dot-2"><span>2</span></div>
+  <div class="si-line" id="line-2"></div>
+  <div class="si-dot" id="dot-3"><span>3</span></div>
+  <div class="si-line" id="line-3"></div>
+  <div class="si-dot" id="dot-4"><span>4</span></div>
+  <div class="si-line" id="line-4"></div>
+  <div class="si-dot" id="dot-5"><span>5</span></div>
+</div>
+
+<!-- ═══════════════════ Step 1: Welcome ═══════════════════ -->
+<div class="step active" id="step-1">
+  <div class="logo-box">
+    <div class="logo-mark"><div class="logo-mark-inner"></div></div>
+    <div class="logo-text">BruV AI</div>
+    <div class="logo-sub">Knowledge Base</div>
+  </div>
+  <div class="step-title">歡迎使用 BruV AI</div>
+  <div class="step-desc">
+    即將引導您完成初始設定。整個流程大約需要 10–20 分鐘，<br>
+    主要時間用於下載 AI 模型（約 10GB）。
+  </div>
+  <div class="req-list">
+    <div class="req-item">
+      <div class="req-dot"></div>
+      <span><strong>Docker Desktop</strong> — 執行所有後台服務</span>
+    </div>
+    <div class="req-item">
+      <div class="req-dot"></div>
+      <span><strong>記憶體 8GB+</strong> — 建議 16GB 以獲得最佳效能</span>
+    </div>
+    <div class="req-item">
+      <div class="req-dot"></div>
+      <span><strong>硬碟空間 20GB+</strong> — AI 模型與資料庫儲存</span>
+    </div>
+    <div class="req-item">
+      <div class="req-dot"></div>
+      <span><strong>Ollama</strong> — 執行地端 AI 語言模型（LLM）</span>
+    </div>
+  </div>
+  <div class="btn-row">
+    <button class="btn btn-primary" onclick="showStep(2)">開始設定</button>
+  </div>
+</div>
+
+<!-- ═══════════════════ Step 2: Docker 安裝檢測 ════════════════════ -->
+<div class="step" id="step-2">
+  <div class="step-title">Docker 安裝確認</div>
+  <div class="step-desc">BruV AI 需要 Docker Desktop 來運行所有後台服務。</div>
+
+  <div class="status-box" id="docker-install-box">
+    <div class="status-icon checking" id="docker-install-icon"></div>
+    <div class="status-text">
+      <div class="status-label" id="docker-install-label">正在檢測 Docker...</div>
+      <div class="status-sub" id="docker-install-sub"></div>
+    </div>
+  </div>
+
+  <div id="docker-not-installed" style="display:none; width:100%">
+    <div class="step-desc" style="text-align:left; margin-bottom:12px;">
+      未偵測到 Docker Desktop。請前往官網下載安裝後，點選「我已安裝完成」重新檢測。
+    </div>
+    <div class="btn-row" style="justify-content:flex-start">
+      <button class="btn btn-primary"
+        onclick="window.setupBridge.openExternal('https://www.docker.com/products/docker-desktop/')">
+        下載 Docker Desktop
+      </button>
+      <button class="btn btn-secondary" onclick="onEnterDockerCheck()">
+        我已安裝完成
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════ Step 3: Docker 服務啟動 ════════════════════ -->
+<div class="step" id="step-3">
+  <div class="step-title">啟動 Docker 服務</div>
+  <div class="step-desc">確認 Docker 執行環境已就緒，才能繼續啟動 BruV AI 服務。</div>
+
+  <div class="status-box" id="docker-run-box">
+    <div class="status-icon checking" id="docker-run-icon"></div>
+    <div class="status-text">
+      <div class="status-label" id="docker-run-label">正在檢測 Docker 狀態...</div>
+      <div class="status-sub" id="docker-run-sub"></div>
+    </div>
+  </div>
+
+  <div id="docker-run-error" style="display:none; width:100%; margin-top:8px;">
+    <div class="btn-row">
+      <button class="btn btn-primary" onclick="onEnterDockerRunning()">重新嘗試</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════ Step 4: Ollama 安裝與模型下載 ═════════════ -->
+<div class="step" id="step-4">
+  <div class="step-title">AI 模型安裝</div>
+  <div class="step-desc">
+    BruV AI 使用 Ollama 執行地端 AI 模型。<br>
+    需要下載兩個模型（共約 10GB），請確認網路穩定後開始。
+  </div>
+
+  <!-- Ollama 安裝狀態 -->
+  <div class="status-box" id="ollama-check-box">
+    <div class="status-icon checking" id="ollama-check-icon"></div>
+    <div class="status-text">
+      <div class="status-label" id="ollama-check-label">正在檢測 Ollama...</div>
+      <div class="status-sub" id="ollama-check-sub"></div>
+    </div>
+  </div>
+
+  <!-- 未安裝 Ollama 提示 -->
+  <div id="ollama-not-installed" style="display:none; width:100%; margin-bottom:12px;">
+    <div class="step-desc" style="text-align:left; margin-bottom:10px;">
+      未偵測到 Ollama。請前往官網下載安裝後，點選「我已安裝完成」重新檢測。
+    </div>
+    <div class="btn-row" style="justify-content:flex-start">
+      <button class="btn btn-primary"
+        onclick="window.setupBridge.openExternal('https://ollama.com/download')">
+        下載 Ollama
+      </button>
+      <button class="btn btn-secondary" onclick="onEnterOllama()">
+        我已安裝完成
+      </button>
+    </div>
+  </div>
+
+  <!-- 模型下載區 -->
+  <div id="model-section" style="display:none; width:100%">
+    <!-- qwen2.5:14b -->
+    <div class="model-card" id="model-card-qwen">
+      <div class="model-header">
+        <div>
+          <div class="model-name">qwen2.5:14b</div>
+          <div class="model-size">主要語言模型  /  約 9 GB</div>
+        </div>
+        <div style="display:flex; align-items:center; gap:8px;">
+          <span class="model-tag pending" id="model-tag-qwen">待下載</span>
+          <button class="btn btn-primary" id="btn-dl-qwen"
+            onclick="pullModel('qwen2.5:14b')" style="padding:6px 14px; font-size:12px">
+            開始下載
+          </button>
+          <button class="btn btn-secondary" id="btn-skip-qwen"
+            onclick="skipModel('qwen2.5:14b')" style="padding:6px 12px; font-size:12px">
+            稍後
+          </button>
+        </div>
+      </div>
+      <div class="progress-wrap" id="progress-wrap-qwen" style="display:none">
+        <div class="progress-label">
+          <span id="progress-text-qwen">準備中...</span>
+          <span id="progress-pct-qwen">0%</span>
+        </div>
+        <div class="progress-bar"><div class="progress-fill" id="progress-fill-qwen" style="width:0%"></div></div>
+      </div>
+      <div class="model-log" id="model-log-qwen"></div>
+    </div>
+
+    <!-- bge-m3 -->
+    <div class="model-card" id="model-card-bge">
+      <div class="model-header">
+        <div>
+          <div class="model-name">bge-m3</div>
+          <div class="model-size">嵌入向量模型  /  約 1.2 GB</div>
+        </div>
+        <div style="display:flex; align-items:center; gap:8px;">
+          <span class="model-tag pending" id="model-tag-bge">待下載</span>
+          <button class="btn btn-primary" id="btn-dl-bge"
+            onclick="pullModel('bge-m3')" style="padding:6px 14px; font-size:12px">
+            開始下載
+          </button>
+          <button class="btn btn-secondary" id="btn-skip-bge"
+            onclick="skipModel('bge-m3')" style="padding:6px 12px; font-size:12px">
+            稍後
+          </button>
+        </div>
+      </div>
+      <div class="progress-wrap" id="progress-wrap-bge" style="display:none">
+        <div class="progress-label">
+          <span id="progress-text-bge">準備中...</span>
+          <span id="progress-pct-bge">0%</span>
+        </div>
+        <div class="progress-bar"><div class="progress-fill" id="progress-fill-bge" style="width:0%"></div></div>
+      </div>
+      <div class="model-log" id="model-log-bge"></div>
+    </div>
+
+    <div class="warn-banner" id="model-skip-warn">
+      部分模型尚未下載，AI 功能可能無法正常使用。您可以在啟動後從設定頁面補充下載。
+    </div>
+
+    <div class="btn-row">
+      <button class="btn btn-primary" id="btn-model-next"
+        onclick="showStep(5)" disabled>
+        下一步
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════ Step 5: 環境變數設定 ════════════════════ -->
+<div class="step" id="step-5">
+  <div class="step-title">基本設定</div>
+  <div class="step-desc">設定管理員帳號與雲端 AI 選項。這些設定之後仍可在系統設定頁面修改。</div>
+
+  <div style="width:100%">
+    <div class="field-group">
+      <label class="field-label" for="admin-email">管理員帳號</label>
+      <input type="email" class="field-input" id="admin-email"
+        value="admin@bruvai.local" placeholder="admin@bruvai.local">
+      <div class="field-hint">用於登入 BruV AI 管理介面</div>
+      <div class="field-error" id="email-error">請輸入有效的電子郵件地址</div>
+    </div>
+
+    <div class="field-group">
+      <label class="field-label" for="admin-password">管理員密碼</label>
+      <input type="password" class="field-input" id="admin-password"
+        placeholder="至少 8 個字元">
+      <div class="field-hint">至少 8 個字元，請記住此密碼</div>
+      <div class="field-error" id="password-error">密碼至少需要 8 個字元</div>
+    </div>
+
+    <div class="toggle-row">
+      <div>
+        <div class="toggle-label">啟用雲端 AI</div>
+        <div class="toggle-sub">使用 Claude / OpenAI / Groq 雲端模型（需要 API Key）</div>
+      </div>
+      <label class="toggle-switch">
+        <input type="checkbox" id="use-cloud-ai" onchange="toggleCloudAI(this.checked)">
+        <span class="toggle-track"></span>
+      </label>
+    </div>
+
+    <div class="api-section" id="api-section">
+      <div class="field-group">
+        <label class="field-label" for="anthropic-key">Anthropic API Key（Claude）</label>
+        <input type="password" class="field-input" id="anthropic-key"
+          placeholder="sk-ant-...（選填，之後可在設定頁補充）">
+      </div>
+      <div class="field-group">
+        <label class="field-label" for="openai-key">OpenAI API Key</label>
+        <input type="password" class="field-input" id="openai-key"
+          placeholder="sk-...（選填，之後可在設定頁補充）">
+      </div>
+      <div class="field-group">
+        <label class="field-label" for="groq-key">Groq API Key</label>
+        <input type="password" class="field-input" id="groq-key"
+          placeholder="gsk_...（選填，之後可在設定頁補充）">
+      </div>
+    </div>
+  </div>
+
+  <div class="btn-row">
+    <button class="btn btn-secondary" onclick="showStep(4)">上一步</button>
+    <button class="btn btn-primary" onclick="submitEnvSettings()">完成設定</button>
+  </div>
+</div>
+
+<!-- ═══════════════════ Step 6: 完成 ════════════════════ -->
+<div class="step" id="step-6">
+  <div class="logo-box" style="margin-bottom:12px">
+    <div class="logo-mark"><div class="logo-mark-inner"></div></div>
+    <div class="logo-text">BruV AI</div>
+  </div>
+  <div class="step-title">設定完成</div>
+  <div class="step-desc" id="completion-desc">正在為您啟動系統，請稍候...</div>
+
+  <div class="completion-steps" id="completion-steps">
+    <div class="cstep cstep-idle" id="cstep-services">
+      <div class="cstep-icon"></div>
+      <div class="cstep-text">
+        <div class="label">啟動容器服務</div>
+        <div class="sub" id="cstep-services-sub">docker compose up -d</div>
+      </div>
+    </div>
+    <div class="cstep cstep-idle" id="cstep-backend">
+      <div class="cstep-icon"></div>
+      <div class="cstep-text">
+        <div class="label">等待後端就緒</div>
+        <div class="sub" id="cstep-backend-sub">輪詢 /api/health</div>
+      </div>
+    </div>
+    <div class="cstep cstep-idle" id="cstep-open">
+      <div class="cstep-icon"></div>
+      <div class="cstep-text">
+        <div class="label">開啟主視窗</div>
+        <div class="sub" id="cstep-open-sub">載入 BruV AI 介面</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="warn-banner" id="completion-error-banner"></div>
+
+  <div class="btn-row" id="completion-retry-row" style="display:none">
+    <button class="btn btn-secondary" onclick="showStep(5)">返回設定</button>
+    <button class="btn btn-primary" onclick="onEnterCompletion()">重新嘗試</button>
+  </div>
+</div>
+
+<script>
+  'use strict'
+
+  // ── State ─────────────────────────────────────────────────
+  let currentStep = 1
+
+  const modelState = {
+    'qwen2.5:14b': { status: 'pending', percent: 0 },
+    'bge-m3':      { status: 'pending', percent: 0 }
+  }
+
+  // ── Step Navigation ───────────────────────────────────────
+  function showStep (n) {
+    document.querySelectorAll('.step').forEach(s => s.classList.remove('active'))
+    document.getElementById(`step-${n}`).classList.add('active')
+
+    // Update indicator dots (steps 1-5 only; step 6 = completion, no dot)
+    document.querySelectorAll('.si-dot').forEach((dot, i) => {
+      const stepNum = i + 1
+      dot.classList.remove('active', 'done')
+      if (stepNum < n && n <= 5) dot.classList.add('done')
+      else if (stepNum === n && n <= 5) dot.classList.add('active')
+      else if (n === 6) dot.classList.add('done')
+    })
+    document.querySelectorAll('.si-line').forEach((line, i) => {
+      line.classList.toggle('done', n > i + 2 || n === 6)
+    })
+
+    currentStep = n
+    if (n === 2) onEnterDockerCheck()
+    if (n === 3) onEnterDockerRunning()
+    if (n === 4) onEnterOllama()
+    if (n === 6) onEnterCompletion()
+  }
+
+  // ── Helpers ───────────────────────────────────────────────
+  function setIcon (el, type) {
+    el.className = `status-icon ${type}`
+  }
+
+  function setModelTag (modelKey, status) {
+    const safeKey = modelKey.replace(/[:.]/g, '-')
+    const tag = document.getElementById(`model-tag-${safeKey === 'qwen2.5-14b' ? 'qwen' : 'bge'}`)
+    if (!tag) return
+    const labels = { pending: '待下載', dl: '下載中', done: '已完成', error: '下載失敗', skipped: '已略過' }
+    tag.className = `model-tag ${status}`
+    tag.textContent = labels[status] || status
+  }
+
+  function modelId (modelName) {
+    return modelName.includes('qwen') ? 'qwen' : 'bge'
+  }
+
+  // ── Step 2: Docker Installation ───────────────────────────
+  async function onEnterDockerCheck () {
+    document.getElementById('docker-not-installed').style.display = 'none'
+    const icon  = document.getElementById('docker-install-icon')
+    const label = document.getElementById('docker-install-label')
+    const sub   = document.getElementById('docker-install-sub')
+
+    setIcon(icon, 'checking')
+    label.textContent = '正在檢測 Docker...'
+    sub.textContent   = ''
+
+    try {
+      const result = await window.setupBridge.checkDocker()
+      if (result.installed) {
+        setIcon(icon, 'success')
+        label.textContent = 'Docker 已安裝'
+        sub.textContent   = result.version || ''
+        setTimeout(() => showStep(3), 1200)
+      } else {
+        setIcon(icon, 'error')
+        label.textContent = '未偵測到 Docker Desktop'
+        sub.textContent   = ''
+        document.getElementById('docker-not-installed').style.display = 'block'
+      }
+    } catch (e) {
+      setIcon(icon, 'error')
+      label.textContent = '偵測失敗'
+      sub.textContent   = String(e?.message || e)
+      document.getElementById('docker-not-installed').style.display = 'block'
+    }
+  }
+
+  // ── Step 3: Docker Running ────────────────────────────────
+  async function onEnterDockerRunning () {
+    document.getElementById('docker-run-error').style.display = 'none'
+    const icon  = document.getElementById('docker-run-icon')
+    const label = document.getElementById('docker-run-label')
+    const sub   = document.getElementById('docker-run-sub')
+
+    setIcon(icon, 'checking')
+    label.textContent = '正在檢測 Docker 執行狀態...'
+    sub.textContent   = ''
+
+    try {
+      const result = await window.setupBridge.checkDockerRunning()
+      if (result.running) {
+        setIcon(icon, 'success')
+        label.textContent = 'Docker 執行環境已就緒'
+        sub.textContent   = ''
+        setTimeout(() => showStep(4), 1000)
+      } else {
+        await startDockerAndWait()
+      }
+    } catch {
+      await startDockerAndWait()
+    }
+  }
+
+  async function startDockerAndWait () {
+    const icon  = document.getElementById('docker-run-icon')
+    const label = document.getElementById('docker-run-label')
+    const sub   = document.getElementById('docker-run-sub')
+
+    setIcon(icon, 'checking')
+    label.textContent = '正在啟動 Docker Desktop...'
+    sub.textContent   = '這可能需要 30–60 秒'
+
+    const result = await window.setupBridge.startDockerDesktop()
+    if (result.success) {
+      setIcon(icon, 'success')
+      label.textContent = 'Docker 已就緒'
+      sub.textContent   = ''
+      setTimeout(() => showStep(4), 1000)
+    } else {
+      setIcon(icon, 'error')
+      label.textContent = 'Docker 啟動失敗'
+      sub.textContent   = result.error || '請手動開啟 Docker Desktop 後重試'
+      document.getElementById('docker-run-error').style.display = 'block'
+    }
+  }
+
+  // ── Step 4: Ollama ────────────────────────────────────────
+  async function onEnterOllama () {
+    document.getElementById('ollama-not-installed').style.display = 'none'
+    document.getElementById('model-section').style.display = 'none'
+    const icon  = document.getElementById('ollama-check-icon')
+    const label = document.getElementById('ollama-check-label')
+    const sub   = document.getElementById('ollama-check-sub')
+
+    setIcon(icon, 'checking')
+    label.textContent = '正在檢測 Ollama...'
+    sub.textContent   = ''
+
+    try {
+      const result = await window.setupBridge.checkOllama()
+      if (result.installed) {
+        setIcon(icon, 'success')
+        label.textContent = 'Ollama 已安裝'
+        sub.textContent   = result.version || ''
+        document.getElementById('model-section').style.display = 'block'
+        refreshModelNext()
+      } else {
+        setIcon(icon, 'error')
+        label.textContent = '未偵測到 Ollama'
+        sub.textContent   = ''
+        document.getElementById('ollama-not-installed').style.display = 'block'
+      }
+    } catch {
+      setIcon(icon, 'error')
+      label.textContent = '偵測失敗'
+      sub.textContent   = ''
+      document.getElementById('ollama-not-installed').style.display = 'block'
+    }
+  }
+
+  async function pullModel (modelName) {
+    const id = modelId(modelName)
+
+    // Disable buttons during download
+    document.getElementById(`btn-dl-${id}`).disabled  = true
+    document.getElementById(`btn-skip-${id}`).disabled = true
+    document.querySelectorAll('[id^="btn-dl-"]').forEach(b => b.disabled = true)
+
+    modelState[modelName].status  = 'downloading'
+    modelState[modelName].percent = 0
+    setModelTag(modelName, 'dl')
+    document.getElementById(`progress-wrap-${id}`).style.display = 'block'
+
+    const result = await window.setupBridge.pullOllamaModel(modelName)
+    if (result.success) {
+      modelState[modelName].status  = 'done'
+      modelState[modelName].percent = 100
+      setModelTag(modelName, 'done')
+      document.getElementById(`progress-fill-${id}`).style.width = '100%'
+      document.getElementById(`progress-pct-${id}`).textContent  = '100%'
+      document.getElementById(`progress-text-${id}`).textContent = '下載完成'
+    } else {
+      modelState[modelName].status = 'error'
+      setModelTag(modelName, 'error')
+      document.getElementById(`model-log-${id}`).textContent =
+        result.error || '下載失敗，請稍後重試'
+      document.getElementById(`btn-dl-${id}`).disabled   = false
+      document.getElementById(`btn-skip-${id}`).disabled = false
+    }
+
+    // Re-enable the other model's button
+    const otherId = id === 'qwen' ? 'bge' : 'qwen'
+    const otherModel = id === 'qwen' ? 'bge-m3' : 'qwen2.5:14b'
+    if (modelState[otherModel].status === 'pending' ||
+        modelState[otherModel].status === 'error') {
+      document.getElementById(`btn-dl-${otherId}`).disabled   = false
+      document.getElementById(`btn-skip-${otherId}`).disabled = false
+    }
+
+    refreshModelNext()
+  }
+
+  function skipModel (modelName) {
+    if (modelState[modelName].status === 'downloading') return
+    modelState[modelName].status = 'skipped'
+    const id = modelId(modelName)
+    setModelTag(modelName, 'skipped')
+    document.getElementById(`btn-dl-${id}`).disabled   = false
+    document.getElementById(`btn-skip-${id}`).disabled = true
+    refreshModelNext()
+  }
+
+  function refreshModelNext () {
+    const q = modelState['qwen2.5:14b'].status
+    const b = modelState['bge-m3'].status
+    const canNext = (q === 'done' || q === 'skipped') &&
+                    (b === 'done' || b === 'skipped')
+    document.getElementById('btn-model-next').disabled = !canNext
+
+    const hasSkip = q === 'skipped' || b === 'skipped'
+    document.getElementById('model-skip-warn').classList.toggle('visible', hasSkip)
+  }
+
+  // Ollama progress listener (registered once)
+  window.setupBridge.onOllamaProgress(function (data) {
+    const id  = modelId(data.model)
+    if (!id) return
+    if (data.percent !== null) {
+      modelState[data.model].percent = data.percent
+      document.getElementById(`progress-fill-${id}`).style.width = data.percent + '%'
+      document.getElementById(`progress-pct-${id}`).textContent  = data.percent + '%'
+    }
+    if (data.line) {
+      document.getElementById(`progress-text-${id}`).textContent = data.line.slice(0, 60)
+      document.getElementById(`model-log-${id}`).textContent     = data.line
+    }
+  })
+
+  // Docker start progress listener (registered once)
+  window.setupBridge.onDockerStartProgress(function (text) {
+    const sub = document.getElementById('docker-run-sub')
+    if (sub) sub.textContent = text
+  })
+
+  // Backend start progress listener (registered once)
+  window.setupBridge.onBackendProgress(function (text) {
+    const el = document.getElementById('cstep-backend-sub')
+    if (el) el.textContent = text
+  })
+
+  // ── Step 5: Env Settings ──────────────────────────────────
+  function toggleCloudAI (checked) {
+    document.getElementById('api-section').classList.toggle('visible', checked)
+  }
+
+  async function submitEnvSettings () {
+    const email    = document.getElementById('admin-email').value.trim()
+    const password = document.getElementById('admin-password').value
+    let valid = true
+
+    // Validate email
+    const emailErr = document.getElementById('email-error')
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      document.getElementById('admin-email').classList.add('invalid')
+      emailErr.style.display = 'block'
+      valid = false
+    } else {
+      document.getElementById('admin-email').classList.remove('invalid')
+      emailErr.style.display = 'none'
+    }
+
+    // Validate password
+    const pwErr = document.getElementById('password-error')
+    if (!password || password.length < 8) {
+      document.getElementById('admin-password').classList.add('invalid')
+      pwErr.style.display = 'block'
+      valid = false
+    } else {
+      document.getElementById('admin-password').classList.remove('invalid')
+      pwErr.style.display = 'none'
+    }
+
+    if (!valid) return
+
+    const settings = {
+      adminEmail:    email,
+      adminPassword: password,
+      useCloudAI:    document.getElementById('use-cloud-ai').checked,
+      anthropicApiKey: document.getElementById('anthropic-key').value.trim(),
+      openaiApiKey:    document.getElementById('openai-key').value.trim(),
+      groqApiKey:      document.getElementById('groq-key').value.trim()
+    }
+
+    try {
+      await window.setupBridge.saveEnvSettings(settings)
+      showStep(6)
+    } catch (e) {
+      alert('設定儲存失敗：' + (e?.message || e))
+    }
+  }
+
+  // ── Step 6: Completion ────────────────────────────────────
+  function setCstep (id, state, subText) {
+    const el = document.getElementById(`cstep-${id}`)
+    el.className = `cstep cstep-${state}`
+    if (subText !== undefined) {
+      document.getElementById(`cstep-${id}-sub`).textContent = subText
+    }
+  }
+
+  async function onEnterCompletion () {
+    // Reset UI
+    document.getElementById('completion-retry-row').style.display = 'none'
+    document.getElementById('completion-error-banner').classList.remove('visible')
+    document.getElementById('completion-desc').textContent = '正在為您啟動系統，請稍候...'
+    setCstep('services', 'idle')
+    setCstep('backend',  'idle')
+    setCstep('open',     'idle')
+
+    // 1. Start services
+    setCstep('services', 'running', 'docker compose up -d')
+    const svcResult = await window.setupBridge.startServices()
+    if (!svcResult.success) {
+      setCstep('services', 'error', svcResult.error || '啟動失敗')
+      showCompletionError('服務啟動失敗：' + (svcResult.error || '未知錯誤'))
+      return
+    }
+    setCstep('services', 'done', '服務已啟動')
+
+    // 2. Wait for backend
+    setCstep('backend', 'running', '等待後端回應...')
+    const beResult = await window.setupBridge.waitForBackend()
+    if (!beResult.success) {
+      setCstep('backend', 'error', beResult.error || '後端無法啟動')
+      showCompletionError('後端啟動逾時，請重新嘗試。')
+      return
+    }
+    setCstep('backend', 'done', '後端已就緒')
+
+    // 3. Complete setup and open main window
+    setCstep('open', 'running', '正在開啟主視窗...')
+    await window.setupBridge.completeSetup()
+    setCstep('open', 'done', '即將顯示主視窗')
+    document.getElementById('completion-desc').textContent = '設定完成！歡迎使用 BruV AI。'
+  }
+
+  function showCompletionError (msg) {
+    const banner = document.getElementById('completion-error-banner')
+    banner.textContent = msg
+    banner.classList.add('visible')
+    document.getElementById('completion-retry-row').style.display = 'flex'
+  }
+</script>
+</body>
+</html>

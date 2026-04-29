@@ -16,6 +16,9 @@ export const useChatStore = defineStore('chat', () => {
   // ── 通知狀態 ──────────────────────────────────────────
   const hasNewMessage = ref(false)  // FAB 紅點
 
+  // ── 選擇的模型（全域共用）────────────────────────────────
+  const selectedModel = ref(localStorage.getItem('last-selected-model') || '')
+
   // ── AgentPanel tab 狀態（三個 tab 各自的 convId） ─────
   const agentTabConvIds = ref({ page: null, global: null, kb: null })
 
@@ -93,13 +96,18 @@ export const useChatStore = defineStore('chat', () => {
     hasNewMessage.value = false
   }
 
+  function setSelectedModel(model) {
+    selectedModel.value = model
+    try { localStorage.setItem('last-selected-model', model) } catch {}
+  }
+
   return {
     conversations, currentConvId, messages, streaming,
     abortController, hasNewMessage, agentTabConvIds,
-    currentConversation,
+    currentConversation, selectedModel,
     loadConversations, loadMessages, selectConversation,
     addConversation, removeConversation, updateConversationTitle,
     appendMessage, updateLastMessage, clearMessages,
-    stopStreaming, markNewMessage, clearNewMessage,
+    stopStreaming, markNewMessage, clearNewMessage, setSelectedModel,
   }
 })

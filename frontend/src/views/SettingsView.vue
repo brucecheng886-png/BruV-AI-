@@ -51,6 +51,23 @@
               <el-table-column label="Context" width="90" align="center">
                 <template #default="{ row }">{{ row.context_length ? row.context_length.toLocaleString() : '-' }}</template>
               </el-table-column>
+              <el-table-column label="啟用" width="70" align="center">
+                <template #default="{ row }">
+                  <el-switch :model-value="row.enabled" @change="(v) => toggleEnabled(row, v)" />
+                </template>
+              </el-table-column>
+              <el-table-column label="預設" width="70" align="center">
+                <template #default="{ row }">
+                  <el-tag v-if="row.is_default" type="success" size="small">預設</el-tag>
+                  <el-button v-else size="small" plain @click="setDefault(row)">設為</el-button>
+                </template>
+              </el-table-column>
+              <el-table-column label="月度上限 (USD)" width="110" align="center">
+                <template #default="{ row }">
+                  <span v-if="row.monthly_quota_usd != null">${{ Number(row.monthly_quota_usd).toFixed(2) }}</span>
+                  <span v-else style="color:#ccc;">—</span>
+                </template>
+              </el-table-column>
               <el-table-column label="操作" width="120" align="center">
                 <template #default="{ row }">
                   <el-button size="small" type="primary" plain @click="openEdit(row)">編輯</el-button>
@@ -93,6 +110,23 @@
               </el-table-column>
               <el-table-column label="Context" width="90" align="center">
                 <template #default="{ row }">{{ row.context_length ? row.context_length.toLocaleString() : '-' }}</template>
+              </el-table-column>
+              <el-table-column label="啟用" width="70" align="center">
+                <template #default="{ row }">
+                  <el-switch :model-value="row.enabled" @change="(v) => toggleEnabled(row, v)" />
+                </template>
+              </el-table-column>
+              <el-table-column label="預設" width="70" align="center">
+                <template #default="{ row }">
+                  <el-tag v-if="row.is_default" type="success" size="small">預設</el-tag>
+                  <el-button v-else size="small" plain @click="setDefault(row)">設為</el-button>
+                </template>
+              </el-table-column>
+              <el-table-column label="月度上限 (USD)" width="110" align="center">
+                <template #default="{ row }">
+                  <span v-if="row.monthly_quota_usd != null">${{ Number(row.monthly_quota_usd).toFixed(2) }}</span>
+                  <span v-else style="color:#ccc;">—</span>
+                </template>
               </el-table-column>
               <el-table-column label="操作" width="120" align="center">
                 <template #default="{ row }">
@@ -313,6 +347,80 @@
           </div>
         </div>
       </template>
+      <template v-if="activeGroup === 'usage'">
+        <div class="settings-section">
+          <div class="section-header" style="justify-content:space-between;">
+            <span style="display:flex;align-items:center;gap:8px;">
+              <Sliders :size="16" :stroke-width="1.5" class="section-icon" />
+              <span>LLM 使用量</span>
+            </span>
+            <div style="display:flex;gap:8px;align-items:center;">
+              <el-select v-model="usageRangeDays" size="small" style="width:140px;" @change="loadUsage">
+                <el-option :value="7"   label="最近 7 天" />
+                <el-option :value="30"  label="最近 30 天" />
+                <el-option :value="90"  label="最近 90 天" />
+              </el-select>
+              <el-button size="small" :loading="usageLoading" @click="loadUsage">重新整理</el-button>
+            </div>
+          </div>
+          <div class="section-body">
+            <div class="usage-totals">
+              <div class="usage-card">
+                <div class="usage-card-label">總呼叫次數</div>
+                <div class="usage-card-value">{{ usageTotals.calls.toLocaleString() }}</div>
+              </div>
+              <div class="usage-card">
+                <div class="usage-card-label">總 Tokens</div>
+                <div class="usage-card-value">{{ usageTotals.total_tokens.toLocaleString() }}</div>
+              </div>
+              <div class="usage-card">
+                <div class="usage-card-label">估算成本 (USD)</div>
+                <div class="usage-card-value">${{ Number(usageTotals.cost_usd || 0).toFixed(4) }}</div>
+              </div>
+            </div>
+            <el-table :data="usageItems" v-loading="usageLoading" stripe style="width:100%;margin-top:16px;" empty-text="尚無使用紀錄">
+              <el-table-column label="模型" prop="model_name" min-width="180" />
+              <el-table-column label="Provider" prop="provider" width="120" />
+              <el-table-column label="呼叫次數" width="100" align="right">
+                <template #default="{ row }">{{ row.calls.toLocaleString() }}</template>
+              </el-table-column>
+              <el-table-column label="成功率" width="90" align="right">
+                <template #default="{ row }">
+                  {{ row.calls > 0 ? Math.round(row.success_calls / row.calls * 100) : 0 }}%
+                </template>
+              </el-table-column>
+              <el-table-column label="平均延遲" width="110" align="right">
+                <template #default="{ row }">{{ row.avg_latency_ms.toLocaleString() }} ms</template>
+              </el-table-column>
+              <el-table-column label="Prompt Tokens" width="130" align="right">
+                <template #default="{ row }">{{ row.prompt_tokens.toLocaleString() }}</template>
+              </el-table-column>
+              <el-table-column label="Completion Tokens" width="150" align="right">
+                <template #default="{ row }">{{ row.completion_tokens.toLocaleString() }}</template>
+              </el-table-column>
+              <el-table-column label="總 Tokens" width="120" align="right">
+                <template #default="{ row }">{{ row.total_tokens.toLocaleString() }}</template>
+              </el-table-column>
+              <el-table-column label="估算成本 (USD)" width="130" align="right">
+                <template #default="{ row }">${{ Number(row.cost_usd || 0).toFixed(4) }}</template>
+              </el-table-column>
+            </el-table>
+            <div class="usage-daily">
+              <div class="section-subtitle">每日使用量（最近 {{ usageRangeDays }} 天）</div>
+              <div v-if="usageDaily.length === 0" style="color:#94a3b8;font-size:13px;padding:16px;">尚無資料</div>
+              <div v-else class="usage-bar-chart">
+                <div v-for="d in usageDaily" :key="d.date" class="usage-bar-row" :title="`${d.date}\n呼叫: ${d.calls}\nTokens: ${d.total_tokens}\n成本: $${Number(d.cost_usd || 0).toFixed(4)}`">
+                  <div class="usage-bar-date">{{ (d.date || '').slice(5) }}</div>
+                  <div class="usage-bar-track">
+                    <div class="usage-bar-fill" :style="{ width: usageBarWidth(d.total_tokens) + '%' }"></div>
+                  </div>
+                  <div class="usage-bar-value">{{ d.total_tokens.toLocaleString() }} tk</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </template>
       <template v-if="activeGroup === 'system'">
         <div class="settings-section">
           <div class="section-header">
@@ -342,6 +450,28 @@
               />
               <div class="skill-actions">
                 <el-button type="primary" size="small" :loading="skill._saving" @click="saveSkill(skill)">儲存</el-button>
+                <el-button type="danger" size="small" plain :loading="skill._saving" @click="uninstallSkill(skill)">解除安裝</el-button>
+              </div>
+            </div>
+          </el-card>
+          <el-card
+            v-for="item in availableSkills"
+            :key="'avail-' + item.page_key"
+            class="skill-card skill-card--uninstalled"
+          >
+            <template #header>
+              <div class="skill-card-header">
+                <div class="skill-card-title">
+                  <component :is="SKILL_ICONS[item.page_key] || Bot" :size="18" :stroke-width="1.5" class="skill-icon" />
+                  <span>{{ item.name }}</span>
+                </div>
+                <el-tag size="small" type="info">未安裝</el-tag>
+              </div>
+            </template>
+            <div class="skill-body">
+              <div class="skill-label" style="color:#94a3b8;">{{ item.description }}</div>
+              <div class="skill-actions">
+                <el-button type="primary" size="small" :loading="item._installing" @click="installSkill(item)">安裝</el-button>
               </div>
             </div>
           </el-card>
@@ -385,6 +515,17 @@
         <el-form-item v-if="modelForm.model_type === 'chat'" label="支援 Vision？">
           <el-switch v-model="modelForm.vision_support" active-text="是" inactive-text="否" />
         </el-form-item>
+        <el-form-item label="啟用">
+          <el-switch v-model="modelForm.enabled" active-text="啟用" inactive-text="停用" />
+        </el-form-item>
+        <el-form-item label="設為預設">
+          <el-switch v-model="modelForm.is_default" active-text="是" inactive-text="否" />
+          <span style="font-size:11px;color:#999;margin-left:8px;">每個模型類型只能有一個預設</span>
+        </el-form-item>
+        <el-form-item label="月度上限 (USD)">
+          <el-input-number v-model="modelForm.monthly_quota_usd" :min="0" :precision="2" :step="10" :placeholder="'不限制'" style="width:160px;" />
+          <span style="font-size:11px;color:#999;margin-left:8px;">留空表示不限制</span>
+        </el-form-item>
         <el-form-item label="">
           <el-button :loading="verifying" @click="verifyModel">
             <Link :size="14" :stroke-width="1.5" style="margin-right:4px;vertical-align:middle" />驗證連線
@@ -420,8 +561,8 @@ import { ref, onMounted, onActivated, reactive, defineComponent, computed } from
 import { useRoute } from 'vue-router'
 import { Refresh, Check } from '@element-plus/icons-vue'
 import { Layers, FolderOpen, MessageSquare, Network, Puzzle, Settings, Dna, Cpu, Key, Sliders, HardDrive, Database, Bot, User, Link, BookOpen } from 'lucide-vue-next'
-import { wikiApi, systemSettingsApi, agentSkillsApi } from '../api/index.js'
-import { ElMessage } from 'element-plus'
+import { wikiApi, systemSettingsApi, agentSkillsApi, monitoringApi } from '../api/index.js'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuthStore } from '../stores/auth.js'
 
 const authStore = useAuthStore()
@@ -459,6 +600,7 @@ const GROUP_DEFS = [
   { key: 'user',   label: '使用者設定' },
   { key: 'model',  label: '模型設定' },
   { key: 'chat',   label: '對話設定' },
+  { key: 'usage',  label: '使用量' },
   { key: 'data',   label: '資料管理' },
   { key: 'system', label: '系統' },
 ]
@@ -466,6 +608,7 @@ const activeGroup = ref('user')
 function onGroupChange(group) {
   activeGroup.value = group
   if (group === 'chat')   { loadRagSettings(); loadChatSettings() }
+  if (group === 'usage')  { loadUsage() }
   if (group === 'data')   { loadSchema(); loadBackupList() }
   if (group === 'system') { loadSkills() }
 }
@@ -511,6 +654,10 @@ const modelForm = reactive({
   provider: 'ollama', base_url: '',
   _api_key: '',
   _hasApiKey: false,   // 表示 DB 已有儲存的 API Key
+  // 治理欄位（Phase A2/A5）
+  enabled: true,
+  is_default: false,
+  monthly_quota_usd: null,
 })
 
 let _settingsMounting = false
@@ -538,11 +685,49 @@ const SKILL_ICONS = {
 }
 
 const skills = ref([])
+const availableSkills = ref([])
+
+// ── 使用量 (Phase B7) ─────────────────────────────────────────────
+const usageRangeDays = ref(30)
+const usageLoading = ref(false)
+const usageItems = ref([])
+const usageDaily = ref([])
+const usageTotals = ref({ calls: 0, total_tokens: 0, cost_usd: 0 })
+
+function usageBarWidth(tokens) {
+  const max = Math.max(1, ...usageDaily.value.map(d => d.total_tokens || 0))
+  return Math.max(2, Math.round((tokens / max) * 100))
+}
+
+async function loadUsage() {
+  usageLoading.value = true
+  try {
+    const days = usageRangeDays.value
+    const start = new Date(Date.now() - days * 86400 * 1000).toISOString()
+    const [summary, daily] = await Promise.all([
+      monitoringApi.getUsageSummary({ start }),
+      monitoringApi.getUsageDaily(days),
+    ])
+    usageItems.value = summary.items || []
+    usageTotals.value = summary.totals || { calls: 0, total_tokens: 0, cost_usd: 0 }
+    usageDaily.value = daily.items || []
+  } catch (e) {
+    ElMessage.error('載入使用量失敗：' + e.message)
+  } finally {
+    usageLoading.value = false
+  }
+}
 
 async function loadSkills() {
   try {
-    const data = await agentSkillsApi.list()
-    skills.value = data.map(s => ({ ...s, _saving: false }))
+    const [installed, available] = await Promise.all([
+      agentSkillsApi.list(),
+      agentSkillsApi.available(),
+    ])
+    skills.value = installed.map(s => ({ ...s, _saving: false }))
+    const installedKeys = new Set(installed.map(s => s.page_key))
+    availableSkills.value = available.filter(s => !installedKeys.has(s.page_key))
+                                     .map(s => ({ ...s, _installing: false }))
   } catch (e) {
     ElMessage.error('載入 AI Skill 失敗：' + e.message)
   }
@@ -559,6 +744,34 @@ async function saveSkill(skill) {
   } catch (e) {
     ElMessage.error('儲存失敗：' + e.message)
   } finally {
+    skill._saving = false
+  }
+}
+
+async function installSkill(item) {
+  item._installing = true
+  try {
+    await agentSkillsApi.install(item.page_key)
+    ElMessage.success(`已安裝「${item.name}」`)
+    await loadSkills()
+  } catch (e) {
+    ElMessage.error('安裝失敗：' + e.message)
+  } finally {
+    item._installing = false
+  }
+}
+
+async function uninstallSkill(skill) {
+  try {
+    await ElMessageBox.confirm(`確定要解除安裝「${skill.name}」？`, '確認', { type: 'warning' })
+  } catch { return }
+  skill._saving = true
+  try {
+    await agentSkillsApi.uninstall(skill.page_key)
+    ElMessage.success(`已解除安裝「${skill.name}」`)
+    await loadSkills()
+  } catch (e) {
+    ElMessage.error('解除安裝失敗：' + e.message)
     skill._saving = false
   }
 }
@@ -590,6 +803,7 @@ function openNewDialog() {
     tags_str: '', _api_key: '', _hasApiKey: false,
     model_type: 'chat', max_tokens: null, vision_support: false,
     provider: prov, base_url: prov === 'ollama' ? 'http://ollama:11434' : '',
+    enabled: true, is_default: false, monthly_quota_usd: null,
   })
   verifyStatus.value = ''
   verifyMsg.value = ''
@@ -615,6 +829,9 @@ function openEdit(row) {
     vision_support: row.vision_support || false,
     provider: row.provider || 'ollama',
     base_url: row.base_url || '',
+    enabled: row.enabled !== false,
+    is_default: row.is_default === true,
+    monthly_quota_usd: row.monthly_quota_usd != null ? Number(row.monthly_quota_usd) : null,
   })
   verifyStatus.value = ''
   verifyMsg.value = ''
@@ -699,6 +916,27 @@ async function deleteModel(id) {
     await wikiApi.delete(id)
     await loadModels()
     ElMessage.success('已刪除')
+  } catch (e) {
+    ElMessage.error(e.message)
+  }
+}
+
+async function toggleEnabled(row, val) {
+  try {
+    await wikiApi.updateGovernance(row.id, { enabled: val })
+    row.enabled = val
+    ElMessage.success(val ? '已啟用' : '已停用')
+  } catch (e) {
+    ElMessage.error(e.message)
+  }
+}
+
+async function setDefault(row) {
+  try {
+    await wikiApi.updateGovernance(row.id, { is_default: true })
+    // 同 model_type 的其他模型 is_default 由後端自動清除；前端重新載入確保一致
+    await loadModels()
+    ElMessage.success(`已將「${row.name}」設為 ${row.model_type || 'chat'} 預設`)
   } catch (e) {
     ElMessage.error(e.message)
   }
@@ -1175,6 +1413,55 @@ async function changePassword() {
   display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
 }
 
+/* ── 使用量 (Phase B7) ───────────────────────────────────── */
+.usage-totals {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  margin-bottom: 4px;
+}
+.usage-card {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  padding: 12px 16px;
+}
+.usage-card-label { font-size: 12px; color: #64748b; }
+.usage-card-value { font-size: 22px; font-weight: 600; color: #0f172a; margin-top: 4px; }
+.usage-daily { margin-top: 20px; }
+.section-subtitle { font-size: 13px; color: #475569; font-weight: 600; margin-bottom: 10px; }
+.usage-bar-chart {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 360px;
+  overflow-y: auto;
+  padding: 4px 8px;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  background: #fff;
+}
+.usage-bar-row {
+  display: grid;
+  grid-template-columns: 60px 1fr 100px;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+.usage-bar-date { color: #64748b; }
+.usage-bar-track {
+  height: 12px;
+  background: #f1f5f9;
+  border-radius: 3px;
+  overflow: hidden;
+}
+.usage-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #60a5fa, #2563eb);
+  border-radius: 3px;
+}
+.usage-bar-value { color: #0f172a; text-align: right; }
+
 /* ── AI Skill ────────────────────────────────────────────── */
 .skill-grid {
   display: grid;
@@ -1183,6 +1470,8 @@ async function changePassword() {
   margin-top: 4px;
 }
 .skill-card { }
+.skill-card--uninstalled { background: #f8fafc; opacity: 0.85; }
+.skill-card--uninstalled:hover { opacity: 1; }
 .skill-card-header {
   display: flex;
   align-items: center;
