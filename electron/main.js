@@ -1010,6 +1010,11 @@ app.on('window-all-closed', async () => {
 
 // ── 自動更新（electron-updater + GitHub Releases）─────────────────────────
 function setupAutoUpdater () {
+  // Private repo 需要 GH_TOKEN 才能取得 release 資訊
+  const ghToken = process.env.GH_TOKEN
+  if (ghToken) {
+    autoUpdater.addAuthHeader(`token ${ghToken}`)
+  }
   autoUpdater.on('update-available', (info) => {
     console.log('[autoUpdater] 偵測到新版本：', info.version)
   })

@@ -49,6 +49,13 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "BruV AI"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "brucecheng886-png",
+      "repo": "BruV-AI-",
+      "private": true,
+      "token": "${env.GH_TOKEN}"
     }
   },
   "devDependencies": {
