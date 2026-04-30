@@ -101,8 +101,12 @@ function ensureEnvFile () {
     if (!fs.existsSync(envDir)) fs.mkdirSync(envDir, { recursive: true })
     if (!fs.existsSync(envPath)) {
       freshlyCreated = true
+      const resourcesEnvPath = path.join(resourcePath, '.env')
       if (fs.existsSync(envExamplePath)) {
         fs.copyFileSync(envExamplePath, envPath)
+      } else if (resourcesEnvPath !== envPath && fs.existsSync(resourcesEnvPath)) {
+        // 以 extraResources 放置的 resources/.env 作為初始範本
+        fs.copyFileSync(resourcesEnvPath, envPath)
       } else {
         // 無範本可複製，建立空白檔避免 docker compose 找不到
         fs.writeFileSync(envPath, '', 'utf8')
@@ -792,6 +796,8 @@ function setupSetupIPC (setupCompleteFile) {
     if (settings.anthropicApiKey !== undefined) updates.ANTHROPIC_API_KEY = settings.anthropicApiKey
     if (settings.openaiApiKey   !== undefined) updates.OPENAI_API_KEY     = settings.openaiApiKey
     if (settings.groqApiKey     !== undefined) updates.GROQ_API_KEY       = settings.groqApiKey
+    if (settings.adminEmail     !== undefined) updates.ADMIN_EMAIL        = settings.adminEmail
+    if (settings.adminPassword  !== undefined) updates.ADMIN_PASSWORD     = settings.adminPassword
 
     try {
       updateEnvFile(envPath, updates)

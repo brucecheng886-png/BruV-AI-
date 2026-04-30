@@ -1,7 +1,6 @@
 """
 Auth Router — 登入/登出/取得目前使用者/帳號管理
 """
-import re
 from fastapi import APIRouter, HTTPException, status, Depends
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -13,7 +12,6 @@ from models import User
 
 router = APIRouter()
 
-EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+(\.[^\s@]+)?$")
 
 
 # ── 登入 ──────────────────────────────────────────────────────
@@ -67,8 +65,6 @@ async def update_me(
     db: AsyncSession = Depends(get_db),
 ):
     if body.email is not None and body.email != user.email:
-        if not EMAIL_RE.match(body.email):
-            raise HTTPException(status_code=400, detail="Email 格式不正確")
         dup = await db.execute(
             select(User).where(User.email == body.email, User.id != user.id)
         )
@@ -119,9 +115,6 @@ class InitAdminRequest(BaseModel):
 
 @router.post("/init-admin")
 async def init_admin(body: InitAdminRequest, db: AsyncSession = Depends(get_db)):
-    if not EMAIL_RE.match(body.email):
-        raise HTTPException(status_code=400, detail="Email 格式不正確")
-
     # 找預設 admin 列（email='admin@local'，密碼為 placeholder）
     result = await db.execute(select(User).where(User.email == "admin@local"))
     admin = result.scalar_one_or_none()

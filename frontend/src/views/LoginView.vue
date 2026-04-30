@@ -53,12 +53,12 @@
 
         <form @submit.prevent="handleLogin" class="login-form">
           <div class="field">
-            <label for="login-email">Email</label>
+            <label for="login-email">帳號</label>
             <input
               id="login-email"
               v-model="form.email"
-              type="email"
-              placeholder="admin@local"
+              type="text"
+              placeholder="admin"
               autocomplete="username"
               required
             />
