@@ -796,8 +796,6 @@ function setupSetupIPC (setupCompleteFile) {
     if (settings.anthropicApiKey !== undefined) updates.ANTHROPIC_API_KEY = settings.anthropicApiKey
     if (settings.openaiApiKey   !== undefined) updates.OPENAI_API_KEY     = settings.openaiApiKey
     if (settings.groqApiKey     !== undefined) updates.GROQ_API_KEY       = settings.groqApiKey
-    if (settings.adminEmail     !== undefined) updates.ADMIN_EMAIL        = settings.adminEmail
-    if (settings.adminPassword  !== undefined) updates.ADMIN_PASSWORD     = settings.adminPassword
 
     try {
       updateEnvFile(envPath, updates)

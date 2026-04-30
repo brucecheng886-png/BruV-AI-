@@ -317,7 +317,7 @@
           <el-card style="margin-bottom:20px;">
             <template #header><b>帳號資訊</b></template>
             <el-descriptions :column="1" border size="small">
-              <el-descriptions-item label="Email">{{ userEmail }}</el-descriptions-item>
+              <el-descriptions-item label="帳號">{{ userEmail }}</el-descriptions-item>
               <el-descriptions-item label="角色">
                 <el-tag :type="userRole === 'admin' ? 'danger' : 'info'" size="small">{{ userRole }}</el-tag>
               </el-descriptions-item>
@@ -331,8 +331,8 @@
               <el-form-item label="顯示名稱">
                 <el-input v-model="profileForm.display_name" placeholder="（選填）" maxlength="100" style="width:260px;" />
               </el-form-item>
-              <el-form-item label="Email">
-                <el-input v-model="profileForm.email" type="email" style="width:260px;" />
+              <el-form-item label="帳號">
+                <el-input v-model="profileForm.email" type="text" style="width:260px;" />
               </el-form-item>
               <el-form-item>
                 <el-button type="primary" :loading="profileSaving" @click="saveProfile">儲存個人資料</el-button>
@@ -1273,7 +1273,7 @@ async function loadProfile () {
 
 async function saveProfile () {
   if (!profileForm.email) {
-    ElMessage.warning('Email 不能為空')
+    ElMessage.warning('帳號不能為空')
     return
   }
   profileSaving.value = true
