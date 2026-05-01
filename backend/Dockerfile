@@ -16,6 +16,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# 複製原始碼
+COPY . .
+
 # 建立資料目錄
 RUN mkdir -p /data
 

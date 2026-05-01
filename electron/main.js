@@ -13,7 +13,7 @@ autoUpdater.autoInstallOnAppQuit = true
 const TARGET_URL = 'http://localhost:80'
 const BACKEND_HEALTH_URL = 'http://localhost:80/api/health'
 const RETRY_INTERVAL_MS = 2000
-const MAX_RETRIES = 30 // 最多等 60 秒
+const MAX_RETRIES = 90 // 最多等 180 秒
 const UPDATE_CHECK_INTERVAL_MS = 60 * 1000 // 每 60 秒檢查前端是否有新版本
 
 let mainWindow = null
@@ -789,7 +789,7 @@ async function waitForBackend (retries = 0) {
       const { response } = await dialog.showMessageBox({
         type: 'error',
         title: 'BruV AI — 後端啟動逾時',
-        message: '後端服務 60 秒內未回應，可能仍在初始化中。',
+        message: '後端服務 180 秒內未回應，可能仍在初始化中。',
         detail: '容器 Log（最後 20 行）：\n\n' + logs.slice(0, 1500),
         buttons: ['重試', '繼續開啟（可能無法使用）'],
         defaultId: 0
@@ -1085,9 +1085,9 @@ function setupSetupIPC (setupCompleteFile) {
     }
   })
 
-  // ── Step 6: 輪詢後端 health（最多 90 秒） ──
+  // ── Step 6: 輪詢後端 health（最多 300 秒） ──
   ipcMain.handle('setup:waitForBackend', async (event) => {
-    for (let i = 0; i < 45; i++) {
+    for (let i = 0; i < 150; i++) {
       await new Promise(r => setTimeout(r, 2000))
       try {
         const ok = await new Promise((resolve, reject) => {
@@ -1101,7 +1101,7 @@ function setupSetupIPC (setupCompleteFile) {
       } catch {
         if (!event.sender.isDestroyed()) {
           event.sender.send('setup:backendProgress',
-            `等待後端回應... (${(i + 1) * 2}s / 90s)`)
+            `等待後端回應... (${(i + 1) * 2}s / 300s)`)
         }
       }
     }
@@ -1114,7 +1114,7 @@ function setupSetupIPC (setupCompleteFile) {
     } catch (e) {
       logs = '（無法取得容器 log）'
     }
-    return { success: false, error: '後端服務無法在 90 秒內啟動', logs: logs.slice(0, 2000) }
+    return { success: false, error: '後端服務無法在 300 秒內啟動', logs: logs.slice(0, 2000) }
   })
 
   // ── 初始化管理員帳號（呼叫後端 API，最多重試 3 次）──
