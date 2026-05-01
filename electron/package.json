@@ -64,5 +64,8 @@
     "png-to-ico": "^3.0.1",
     "sharp": "^0.34.5",
     "svg2ico": "^1.0.35"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.3"
   }
 }
