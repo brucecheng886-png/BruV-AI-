@@ -81,8 +81,8 @@
       display: none;
       flex-direction: column;
       align-items: center;
-      padding: 0 56px 24px;
-      height: calc(600px - 80px);
+      padding: 0 0 24px;
+      height: calc(600px - 80px - 38px);
       overflow-y: auto;
     }
     .step.active { display: flex; }
@@ -358,9 +358,88 @@
     /* ── API key section ─────────────────────────────────────── */
     .api-section { width: 100%; display: none; }
     .api-section.visible { display: block; }
+
+    /* ── Indeterminate Progress ──────────────────────────────── */
+    .prog-indet-wrap { width: 100%; margin: 8px 0; }
+    .prog-indet-label { font-size: 12px; color: var(--text-muted); margin-bottom: 6px; line-height: 1.5; }
+    .prog-indet { width: 100%; height: 4px; border-radius: 2px; background: var(--border); overflow: hidden; }
+    .prog-indet-fill {
+      height: 100%; width: 40%;
+      background: var(--primary); border-radius: 2px;
+      animation: prog-slide 1.4s ease-in-out infinite;
+    }
+    @keyframes prog-slide {
+      0%   { transform: translateX(-100%); }
+      100% { transform: translateX(350%); }
+    }
+    .timer-text { font-size: 12px; color: var(--text-muted); text-align: center; margin-top: 6px; }
+    .docker-log-box {
+      background: var(--bg-input); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 8px 12px;
+      margin-top: 8px; min-height: 52px;
+    }
+    .docker-log-line { font-size: 11px; color: #64748b; line-height: 1.6; font-family: monospace; }
+
+    /* ── Custom Title Bar ────────────────────────────────────── */
+    .titlebar {
+      width: 100%; height: 38px;
+      background: #0a0a23;
+      display: flex; align-items: center;
+      padding: 0 16px;
+      -webkit-app-region: drag;
+      flex-shrink: 0;
+      border-bottom: 1px solid var(--border);
+      position: relative;
+    }
+    .titlebar-title {
+      font-size: 12px; color: var(--text-muted); font-weight: 500;
+      position: absolute; left: 50%; transform: translateX(-50%);
+      pointer-events: none;
+    }
+    .titlebar-btns {
+      display: flex; align-items: center; gap: 8px;
+      margin-left: auto;
+      -webkit-app-region: no-drag;
+    }
+    .tbar-btn {
+      width: 13px; height: 13px;
+      border-radius: 50%; border: none;
+      cursor: pointer; outline: none;
+      transition: opacity 0.15s; flex-shrink: 0;
+    }
+    .tbar-btn:hover { opacity: 0.75; }
+    .tbar-btn-red    { background: #ef4444; }
+    .tbar-btn-yellow { background: #f59e0b; }
+    .tbar-btn-green  { background: #10b981; }
+
+    /* ── Docker Pull Progress ────────────────────────────────── */
+    .pull-prog-bar-wrap { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+    .pull-prog-bar { flex: 1; height: 8px; border-radius: 4px; background: var(--border); overflow: hidden; }
+    .pull-prog-fill { height: 100%; border-radius: 4px; background: var(--primary); transition: width 0.3s ease; }
+    .pull-prog-pct  { font-size: 12px; color: var(--text-muted); width: 36px; text-align: right; flex-shrink: 0; }
+    .pull-prog-info { display: flex; justify-content: space-between; font-size: 11px; color: var(--text-muted); }
+
+    /* ── Wizard Wrap ─────────────────────────────────────────── */
+    .wizard-wrap {
+      padding: 0 32px;
+      height: calc(600px - 38px);
+      display: flex; flex-direction: column;
+      overflow: hidden;
+    }
   </style>
 </head>
 <body>
+<!-- Custom Title Bar -->
+<div class="titlebar">
+  <span class="titlebar-title">BruV AI — 初始設定</span>
+  <div class="titlebar-btns">
+    <button class="tbar-btn tbar-btn-yellow" id="btn-minimize" title="最小化"></button>
+    <button class="tbar-btn tbar-btn-green"  id="btn-maximize" title="最大化"></button>
+    <button class="tbar-btn tbar-btn-red"    id="btn-close"    title="關閉"></button>
+  </div>
+</div>
+<!-- Main Content -->
+<div class="wizard-wrap">
 
 <!-- Step Indicator -->
 <div class="step-indicator" id="step-indicator">
@@ -691,10 +770,17 @@
       </div>
       <div class="prog-indet"><div class="prog-indet-fill"></div></div>
     </div>
-    <div class="docker-log-box" id="docker-log-box">
-      <div class="docker-log-line" id="docker-log-l1">等待輸出...</div>
-      <div class="docker-log-line" id="docker-log-l2"></div>
-      <div class="docker-log-line" id="docker-log-l3"></div>
+    <div id="docker-pull-progress" style="display:none; width:100%; margin-top:8px;">
+      <div class="pull-prog-bar-wrap">
+        <div class="pull-prog-bar">
+          <div class="pull-prog-fill" id="pull-prog-fill" style="width:0%"></div>
+        </div>
+        <span class="pull-prog-pct" id="pull-prog-pct">0%</span>
+      </div>
+      <div class="pull-prog-info">
+        <span id="pull-prog-size">正在準備下載...</span>
+        <span id="pull-prog-layers">0 / 0 layers</span>
+      </div>
     </div>
   </div>
 
@@ -714,12 +800,14 @@
   </div>
 </div>
 
+</div><!-- end wizard-wrap -->
+
 <script>
   'use strict'
 
   // ── State ─────────────────────────────────────────────────
   let currentStep = 1
-  let dockerLogLines = []
+  const pullLayers = new Map() // layerId -> { downloaded, total, status }
 
   const modelState = {
     'qwen2.5:14b': { status: 'pending', percent: 0 },
@@ -1034,15 +1122,77 @@
     if (el) el.textContent = text
   })
 
+  // ── Docker Pull Progress Helpers ─────────────────────────
+  function parseSizeToBytes (val, unit) {
+    const n = parseFloat(val)
+    if (unit === 'kB' || unit === 'KB') return n * 1024
+    if (unit === 'MB') return n * 1024 * 1024
+    if (unit === 'GB') return n * 1024 * 1024 * 1024
+    return n
+  }
+
+  function formatBytes (bytes) {
+    if (bytes >= 1073741824) return (bytes / 1073741824).toFixed(2) + ' GB'
+    if (bytes >= 1048576)    return (bytes / 1048576).toFixed(1)  + ' MB'
+    return (bytes / 1024).toFixed(0) + ' KB'
+  }
+
+  function updatePullProgressUI () {
+    let totalBytes = 0, downloadedBytes = 0, doneCount = 0, totalCount = 0
+    for (const [, layer] of pullLayers) {
+      if (layer.total > 0) {
+        totalBytes      += layer.total
+        downloadedBytes += Math.min(layer.downloaded, layer.total)
+      }
+      if (layer.status === 'done') doneCount++
+      totalCount++
+    }
+    const pct    = totalBytes > 0 ? Math.min(100, Math.round(downloadedBytes / totalBytes * 100)) : 0
+    const fillEl  = document.getElementById('pull-prog-fill')
+    const pctEl   = document.getElementById('pull-prog-pct')
+    const sizeEl  = document.getElementById('pull-prog-size')
+    const layerEl = document.getElementById('pull-prog-layers')
+    const progEl  = document.getElementById('docker-pull-progress')
+    if (progEl && progEl.style.display === 'none') progEl.style.display = 'block'
+    if (fillEl)  fillEl.style.width  = pct + '%'
+    if (pctEl)   pctEl.textContent   = pct + '%'
+    if (sizeEl)  sizeEl.textContent  = totalBytes > 0
+      ? '已下載 ' + formatBytes(downloadedBytes) + ' / 約 ' + formatBytes(totalBytes)
+      : '正在準備下載...'
+    if (layerEl) layerEl.textContent = doneCount + ' / ' + totalCount + ' layers'
+  }
+
   // Docker compose log listener (registered once)
   window.setupBridge.onDockerLog(function (line) {
-    dockerLogLines.push(line)
-    if (dockerLogLines.length > 3) dockerLogLines = dockerLogLines.slice(-3)
-    ;['docker-log-l1','docker-log-l2','docker-log-l3'].forEach((id, i) => {
-      const el = document.getElementById(id)
-      if (el) el.textContent = dockerLogLines[i] || ''
-    })
+    // Parse Downloading: "abc123: Downloading [=>] 70.25MB/3.088GB"
+    const dlMatch = line.match(/^([a-f0-9]+): Downloading\s+\[.*?\]\s+([\d.]+)(kB|MB|GB)\/([\d.]+)(kB|MB|GB)/)
+    if (dlMatch) {
+      const downloaded = parseSizeToBytes(dlMatch[2], dlMatch[3])
+      const total      = parseSizeToBytes(dlMatch[4], dlMatch[5])
+      pullLayers.set(dlMatch[1], { downloaded, total, status: 'downloading' })
+      updatePullProgressUI()
+      return
+    }
+    // Parse complete: "abc123: Pull complete" / "Already exists" / "Download complete"
+    const doneMatch = line.match(/^([a-f0-9]+): (Pull complete|Already exists|Download complete|Verifying Checksum)/)
+    if (doneMatch) {
+      const existing = pullLayers.get(doneMatch[1]) || { downloaded: 0, total: 0 }
+      pullLayers.set(doneMatch[1], { downloaded: existing.total || existing.downloaded, total: existing.total || existing.downloaded, status: 'done' })
+      updatePullProgressUI()
+      return
+    }
+    // Parse layer start: register unknown layers
+    const startMatch = line.match(/^([a-f0-9]+): (Pulling fs layer|Waiting|Preparing|Extracting)/)
+    if (startMatch && !pullLayers.has(startMatch[1])) {
+      pullLayers.set(startMatch[1], { downloaded: 0, total: 0, status: startMatch[2].toLowerCase() })
+      updatePullProgressUI()
+    }
   })
+
+  // ── Title Bar ─────────────────────────────────────────────
+  document.getElementById('btn-minimize').addEventListener('click', () => window.setupBridge.minimize())
+  document.getElementById('btn-maximize').addEventListener('click', () => window.setupBridge.maximize())
+  document.getElementById('btn-close').addEventListener('click',    () => window.setupBridge.closeWindow())
 
   // ── Step 5: Env Settings ──────────────────────────────────
   function toggleCloudAI (checked) {
@@ -1148,10 +1298,17 @@
     document.getElementById('completion-desc').textContent = '正在為您啟動系統，請稍候...'
     document.getElementById('services-progress-area').style.display = 'none'
     document.getElementById('backend-progress-area').style.display  = 'none'
-    dockerLogLines = []
-    const _ll1 = document.getElementById('docker-log-l1')
-    if (_ll1) _ll1.textContent = '等待輸出...'
-    ;['docker-log-l2','docker-log-l3'].forEach(id => { const e = document.getElementById(id); if (e) e.textContent = '' })
+    pullLayers.clear()
+    const _pp = document.getElementById('docker-pull-progress')
+    if (_pp) _pp.style.display = 'none'
+    const _pf = document.getElementById('pull-prog-fill')
+    if (_pf) _pf.style.width = '0%'
+    const _ppct = document.getElementById('pull-prog-pct')
+    if (_ppct) _ppct.textContent = '0%'
+    const _psz = document.getElementById('pull-prog-size')
+    if (_psz) _psz.textContent = '正在準備下載...'
+    const _pl = document.getElementById('pull-prog-layers')
+    if (_pl) _pl.textContent = '0 / 0 layers'
     setCstep('services', 'idle')
     setCstep('backend',  'idle')
     setCstep('open',     'idle')

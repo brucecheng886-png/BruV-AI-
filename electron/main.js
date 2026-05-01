@@ -807,7 +807,7 @@ function createSetupWizard () {
     width: 800,
     height: 600,
     resizable: false,
-    frame: true,
+    frame: false,
     title: 'BruV AI — 初始設定',
     webPreferences: {
       preload: path.join(__dirname, 'setup-preload.js'),
@@ -1181,6 +1181,11 @@ function setupSetupIPC (setupCompleteFile) {
   ipcMain.handle('setup:openExternal', (_, url) => {
     shell.openExternal(url)
   })
+
+  // ── 視窗控制 ──
+  ipcMain.handle('setup:minimize',    () => { setupWizardWindow?.minimize() })
+  ipcMain.handle('setup:maximize',    () => { setupWizardWindow?.isMaximized() ? setupWizardWindow.unmaximize() : setupWizardWindow.maximize() })
+  ipcMain.handle('setup:closeWindow', () => { setupWizardWindow?.close() })
 }
 
 // ── App 生命週期 ──────────────────────────────────────────────────────────────

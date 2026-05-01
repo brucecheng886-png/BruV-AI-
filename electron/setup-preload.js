@@ -49,4 +49,9 @@ contextBridge.exposeInMainWorld('setupBridge', {
 
   // 通用：在系統瀏覽器開啟外部連結
   openExternal: (url) => ipcRenderer.invoke('setup:openExternal', url),
+
+  // 視窗控制
+  minimize:    () => ipcRenderer.invoke('setup:minimize'),
+  maximize:    () => ipcRenderer.invoke('setup:maximize'),
+  closeWindow: () => ipcRenderer.invoke('setup:closeWindow'),
 })
