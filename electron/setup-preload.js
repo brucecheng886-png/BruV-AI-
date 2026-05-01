@@ -31,6 +31,10 @@ contextBridge.exposeInMainWorld('setupBridge', {
   // Step 6: 啟動容器服務
   startServices: () => ipcRenderer.invoke('setup:startServices'),
 
+  // Step 6: Docker compose 即時 log（串流）
+  onDockerLog: (cb) =>
+    ipcRenderer.on('setup:dockerLog', (_, line) => cb(line)),
+
   // Step 6: 等待後端就緒（輪詢 health，附進度事件）
   waitForBackend: () => ipcRenderer.invoke('setup:waitForBackend'),
   onBackendProgress: (cb) =>

@@ -423,6 +423,11 @@
     </div>
   </div>
 
+  <div class="prog-indet-wrap" id="docker-check-prog" style="display:none; width:100%">
+    <div class="prog-indet-label">正在偵測 Docker 安裝狀況...</div>
+    <div class="prog-indet"><div class="prog-indet-fill"></div></div>
+  </div>
+
   <div id="docker-not-installed" style="display:none; width:100%">
     <div class="step-desc" style="text-align:left; margin-bottom:12px;">
       未偵測到 Docker Desktop。請前往官網下載安裝後，點選「我已安裝完成」重新檢測。
@@ -450,6 +455,16 @@
       <div class="status-label" id="docker-run-label">正在檢測 Docker 狀態...</div>
       <div class="status-sub" id="docker-run-sub"></div>
     </div>
+  </div>
+
+  <div class="prog-indet-wrap" id="docker-run-prog" style="display:none; width:100%">
+    <div class="prog-indet-label" id="docker-run-prog-label">正在等待 Docker Desktop 啟動...<br>
+      <span style="font-size:11px; color:var(--warn)">⏳ 最多等待 60 秒，首次啟動請稍候</span>
+    </div>
+    <div class="prog-indet"><div class="prog-indet-fill"></div></div>
+  </div>
+  <div class="timer-text" id="docker-run-timer" style="display:none">
+    已等待 <span id="docker-run-elapsed">0</span> 秒 / 最多 60 秒
   </div>
 
   <div id="docker-run-error" style="display:none; width:100%; margin-top:8px;">
@@ -667,6 +682,30 @@
     </div>
   </div>
 
+  <!-- 容器服務啟動進度 -->
+  <div id="services-progress-area" style="display:none; width:100%">
+    <div class="prog-indet-wrap">
+      <div class="prog-indet-label">
+        正在下載並啟動容器服務...<br>
+        <span style="font-size:11px; color:var(--warn)">⏳ 首次啟動需要 5–15 分鐘（從網路下載 image），請耐心等待</span>
+      </div>
+      <div class="prog-indet"><div class="prog-indet-fill"></div></div>
+    </div>
+    <div class="docker-log-box" id="docker-log-box">
+      <div class="docker-log-line" id="docker-log-l1">等待輸出...</div>
+      <div class="docker-log-line" id="docker-log-l2"></div>
+      <div class="docker-log-line" id="docker-log-l3"></div>
+    </div>
+  </div>
+
+  <!-- 後端健康檢查進度 -->
+  <div id="backend-progress-area" style="display:none; width:100%">
+    <div class="prog-indet-wrap">
+      <div class="prog-indet-label">正在等待後端服務就緒... 通常需要 10–30 秒</div>
+      <div class="prog-indet"><div class="prog-indet-fill"></div></div>
+    </div>
+  </div>
+
   <div class="warn-banner" id="completion-error-banner"></div>
 
   <div class="btn-row" id="completion-retry-row" style="display:none">
@@ -680,6 +719,7 @@
 
   // ── State ─────────────────────────────────────────────────
   let currentStep = 1
+  let dockerLogLines = []
 
   const modelState = {
     'qwen2.5:14b': { status: 'pending', percent: 0 },
@@ -741,9 +781,11 @@
     setIcon(icon, 'checking')
     label.textContent = '正在檢測 Docker...'
     sub.textContent   = ''
+    document.getElementById('docker-check-prog').style.display = 'block'
 
     try {
       const result = await window.setupBridge.checkDocker()
+      document.getElementById('docker-check-prog').style.display = 'none'
       if (result.installed) {
         setIcon(icon, 'success')
         label.textContent = 'Docker 已安裝'
@@ -756,6 +798,7 @@
         document.getElementById('docker-not-installed').style.display = 'block'
       }
     } catch (e) {
+      document.getElementById('docker-check-prog').style.display = 'none'
       setIcon(icon, 'error')
       label.textContent = '偵測失敗'
       sub.textContent   = String(e?.message || e)
@@ -773,32 +816,60 @@
     setIcon(icon, 'checking')
     label.textContent = '正在檢測 Docker 執行狀態...'
     sub.textContent   = ''
+    const _runProg = document.getElementById('docker-run-prog')
+    const _runProgLbl = document.getElementById('docker-run-prog-label')
+    if (_runProgLbl) _runProgLbl.innerHTML = '正在偵測 Docker 執行狀態...'
+    if (_runProg) _runProg.style.display = 'block'
 
     try {
       const result = await window.setupBridge.checkDockerRunning()
       if (result.running) {
+        if (_runProg) _runProg.style.display = 'none'
         setIcon(icon, 'success')
         label.textContent = 'Docker 執行環境已就緒'
         sub.textContent   = ''
         setTimeout(() => showStep(4), 1000)
       } else {
+        if (_runProg) _runProg.style.display = 'none'
         await startDockerAndWait()
       }
     } catch {
+      if (_runProg) _runProg.style.display = 'none'
       await startDockerAndWait()
     }
   }
 
   async function startDockerAndWait () {
-    const icon  = document.getElementById('docker-run-icon')
-    const label = document.getElementById('docker-run-label')
-    const sub   = document.getElementById('docker-run-sub')
+    const icon      = document.getElementById('docker-run-icon')
+    const label     = document.getElementById('docker-run-label')
+    const sub       = document.getElementById('docker-run-sub')
+    const prog      = document.getElementById('docker-run-prog')
+    const progLbl   = document.getElementById('docker-run-prog-label')
+    const timerEl   = document.getElementById('docker-run-timer')
+    const elapsedEl = document.getElementById('docker-run-elapsed')
 
     setIcon(icon, 'checking')
     label.textContent = '正在啟動 Docker Desktop...'
     sub.textContent   = '這可能需要 30–60 秒'
+    if (progLbl) progLbl.innerHTML = '正在等待 Docker Desktop 啟動...<br><span style="font-size:11px; color:var(--warn)">⏳ 最多等待 60 秒，首次啟動請稍候</span>'
+    if (prog) prog.style.display         = 'block'
+    if (timerEl) timerEl.style.display   = 'block'
+    if (elapsedEl) elapsedEl.textContent = '0'
+
+    let secs = 0
+    const intervalId = setInterval(() => {
+      secs++
+      if (elapsedEl) elapsedEl.textContent = secs
+      if (secs === 45 && progLbl) {
+        progLbl.innerHTML = '仍在等待中，請稍候...<br><span style="font-size:11px; color:var(--warn)">⚠️ 若超過 2 分鐘仍未就緒，請手動開啟 Docker Desktop</span>'
+      }
+    }, 1000)
 
     const result = await window.setupBridge.startDockerDesktop()
+    clearInterval(intervalId)
+    if (prog) prog.style.display         = 'none'
+    if (timerEl) timerEl.style.display   = 'none'
+
     if (result.success) {
       setIcon(icon, 'success')
       label.textContent = 'Docker 已就緒'
@@ -963,6 +1034,16 @@
     if (el) el.textContent = text
   })
 
+  // Docker compose log listener (registered once)
+  window.setupBridge.onDockerLog(function (line) {
+    dockerLogLines.push(line)
+    if (dockerLogLines.length > 3) dockerLogLines = dockerLogLines.slice(-3)
+    ;['docker-log-l1','docker-log-l2','docker-log-l3'].forEach((id, i) => {
+      const el = document.getElementById(id)
+      if (el) el.textContent = dockerLogLines[i] || ''
+    })
+  })
+
   // ── Step 5: Env Settings ──────────────────────────────────
   function toggleCloudAI (checked) {
     document.getElementById('api-section').classList.toggle('visible', checked)
@@ -1065,13 +1146,21 @@
     document.getElementById('completion-retry-row').style.display = 'none'
     document.getElementById('completion-error-banner').classList.remove('visible')
     document.getElementById('completion-desc').textContent = '正在為您啟動系統，請稍候...'
+    document.getElementById('services-progress-area').style.display = 'none'
+    document.getElementById('backend-progress-area').style.display  = 'none'
+    dockerLogLines = []
+    const _ll1 = document.getElementById('docker-log-l1')
+    if (_ll1) _ll1.textContent = '等待輸出...'
+    ;['docker-log-l2','docker-log-l3'].forEach(id => { const e = document.getElementById(id); if (e) e.textContent = '' })
     setCstep('services', 'idle')
     setCstep('backend',  'idle')
     setCstep('open',     'idle')
 
     // 1. Start services
-    setCstep('services', 'running', 'docker compose up -d')
+    setCstep('services', 'running', '正在下載並啟動容器（首次需 5–15 分鐘）...')
+    document.getElementById('services-progress-area').style.display = 'block'
     const svcResult = await window.setupBridge.startServices()
+    document.getElementById('services-progress-area').style.display = 'none'
     if (!svcResult.success) {
       setCstep('services', 'error', svcResult.error || '啟動失敗')
       showCompletionError('服務啟動失敗：' + (svcResult.error || '未知錯誤'))
@@ -1081,7 +1170,9 @@
 
     // 2. Wait for backend
     setCstep('backend', 'running', '等待後端回應...')
+    document.getElementById('backend-progress-area').style.display = 'block'
     const beResult = await window.setupBridge.waitForBackend()
+    document.getElementById('backend-progress-area').style.display = 'none'
     if (!beResult.success) {
       const logDetail = beResult.logs ? '\n\nLog：\n' + beResult.logs.slice(0, 500) : ''
       setCstep('backend', 'error', beResult.error || '後端無法啟動')
@@ -1125,7 +1216,9 @@
     document.getElementById('completion-desc').textContent = '正在重試，請稍候...'
 
     setCstep('backend', 'running', '等待後端回應...')
+    document.getElementById('backend-progress-area').style.display = 'block'
     const beResult = await window.setupBridge.waitForBackend()
+    document.getElementById('backend-progress-area').style.display = 'none'
     if (!beResult.success) {
       const logDetail = beResult.logs ? '\n\nLog：\n' + beResult.logs.slice(0, 500) : ''
       setCstep('backend', 'error', beResult.error || '後端無法啟動')

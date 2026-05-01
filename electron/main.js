@@ -997,7 +997,7 @@ function setupSetupIPC (setupCompleteFile) {
   })
 
   // ── Step 6: 啟動容器服務 ──
-  ipcMain.handle('setup:startServices', async () => {
+  ipcMain.handle('setup:startServices', async (event) => {
     const { freshlyCreated, missingTemplate } = ensureEnvFile()
     if (missingTemplate) {
       return { success: false, error: '找不到 .env.example，安裝可能不完整。請重新安裝 BruV AI。' }
@@ -1027,19 +1027,44 @@ function setupSetupIPC (setupCompleteFile) {
     //   await purgeStatefulVolumes()
     // }
 
+    // 用 spawn 串流 stdout/stderr，即時傳給前端顯示
+    const upArgs = ['compose', '-f', composePath]
+    if (gpuOverridePath) upArgs.push('-f', gpuOverridePath)
+    upArgs.push('--env-file', envPath, 'up', '-d', '--remove-orphans')
+
     const runUp = () => new Promise((resolve, reject) => {
-      // 首次安裝需 build 3 個 image，設 30 分鐘 timeout
-      exec(upCmd, { timeout: 1800000, maxBuffer: 64 * 1024 * 1024 },
-        (err, _stdout, stderr) => {
-          if (err) {
-            const msg = (stderr || err.message || '').toString()
-            const tail = msg.split(/\r?\n/).slice(-20).join(' | ')
-            const e = new Error(tail.slice(0, 1500))
-            e.fullMessage = msg
-            reject(e)
-          } else resolve()
+      const child = spawn('docker', upArgs, { stdio: ['ignore', 'pipe', 'pipe'] })
+      let logBuf = ''
+
+      const handleData = (data) => {
+        const lines = data.toString().split(/\r?\n/).filter(l => l.trim())
+        for (const line of lines) {
+          logBuf += line + '\n'
+          if (!event.sender.isDestroyed()) {
+            event.sender.send('setup:dockerLog', line)
+          }
         }
-      )
+      }
+      child.stdout.on('data', handleData)
+      child.stderr.on('data', handleData)
+
+      const timeoutId = setTimeout(() => {
+        child.kill()
+        reject(new Error('docker compose up 超過 30 分鐘逾時'))
+      }, 1800000)
+
+      child.on('close', (code) => {
+        clearTimeout(timeoutId)
+        if (code === 0) resolve()
+        else {
+          const tail = logBuf.split(/\r?\n/).slice(-20).join(' | ')
+          reject(new Error(tail.slice(0, 1500)))
+        }
+      })
+      child.on('error', (err) => {
+        clearTimeout(timeoutId)
+        reject(err)
+      })
     })
 
     try {
