@@ -116,6 +116,16 @@ function ensureEnvFile () {
     }
     // 隨機化佔位符（幂等：已被替換的欄位不會重生）
     randomizeEnvPlaceholders(envPath)
+    // 將 userData/.env 同步到 resources/.env，確保 docker-compose env_file: .env
+    // 讀到的是已隨機化的密碼（而非 resources 裡打包的原始 template）
+    try {
+      const resourcesEnvDest = path.join(resourcePath, '.env')
+      if (app.isPackaged && resourcesEnvDest !== envPath) {
+        fs.copyFileSync(envPath, resourcesEnvDest)
+      }
+    } catch (copyErr) {
+      console.warn('[ensureEnvFile] 無法同步 .env 到 resources：', copyErr.message)
+    }
   } catch (err) {
     console.error('[ensureEnvFile] 失敗：', err)
   }
