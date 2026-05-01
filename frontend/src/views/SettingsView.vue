@@ -438,6 +438,30 @@
         </div>
       </template>
       <template v-if="activeGroup === 'system'">
+        <!-- 關閉偏好（僅 Electron 模式顯示） -->
+        <div v-if="isElectron" class="settings-section">
+          <div class="section-header">
+            <Settings :size="16" :stroke-width="1.5" class="section-icon" />
+            <span>應用程式行為</span>
+          </div>
+          <div class="section-body">
+            <div class="field-row" style="align-items:center;gap:16px;flex-wrap:wrap;">
+              <span style="font-size:13px;color:#94a3b8;min-width:80px;">關閉視窗偏好</span>
+              <el-tag v-if="closePref === 'minimize'" type="success">收到系統匣</el-tag>
+              <el-tag v-else-if="closePref === 'quit'" type="danger">停止服務並退出</el-tag>
+              <el-tag v-else type="info">未設定（每次詢問）</el-tag>
+              <el-button
+                v-if="closePref"
+                size="small"
+                type="warning"
+                plain
+                :loading="resetPrefLoading"
+                @click="resetClosePref"
+              >重置偏好</el-button>
+            </div>
+          </div>
+        </div>
+
         <div class="settings-section">
           <div class="section-header">
             <Bot :size="16" :stroke-width="1.5" class="section-icon" />
@@ -626,7 +650,7 @@ function onGroupChange(group) {
   if (group === 'chat')   { loadRagSettings(); loadChatSettings() }
   if (group === 'usage')  { loadUsage() }
   if (group === 'data')   { loadSchema(); loadBackupList() }
-  if (group === 'system') { loadSkills() }
+  if (group === 'system') { loadSkills(); loadClosePref() }
 }
 function _applyRouteGroup() {
   const g = route.query.group
@@ -702,6 +726,30 @@ const SKILL_ICONS = {
 
 const skills = ref([])
 const availableSkills = ref([])
+
+// ── Electron 關閉偏好 ──────────────────────────────────────────────
+const isElectron = typeof window !== 'undefined' && !!window.electronAPI?.getClosePreference
+const closePref = ref(null)
+const resetPrefLoading = ref(false)
+async function loadClosePref () {
+  if (!isElectron) return
+  try {
+    const res = await window.electronAPI.getClosePreference()
+    closePref.value = res?.preference ?? null
+  } catch { closePref.value = null }
+}
+async function resetClosePref () {
+  resetPrefLoading.value = true
+  try {
+    await window.electronAPI.resetClosePreference()
+    closePref.value = null
+    ElMessage.success('偏好已重置，下次關閉時會再次詢問。')
+  } catch (e) {
+    ElMessage.error('重置失敗：' + e.message)
+  } finally {
+    resetPrefLoading.value = false
+  }
+}
 
 // ── 使用量 (Phase B7) ─────────────────────────────────────────────
 const usageRangeDays = ref(30)

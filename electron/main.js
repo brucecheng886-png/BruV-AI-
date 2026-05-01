@@ -1,4 +1,4 @@
-const { app, BrowserWindow, shell, ipcMain, globalShortcut, Menu, MenuItem, clipboard, dialog, net, safeStorage } = require('electron')
+const { app, BrowserWindow, shell, ipcMain, globalShortcut, Menu, MenuItem, Tray, nativeImage, clipboard, dialog, net, safeStorage } = require('electron')
 const path = require('path')
 const https = require('https')
 const http = require('http')
@@ -19,6 +19,7 @@ const UPDATE_CHECK_INTERVAL_MS = 60 * 1000 // 每 60 秒檢查前端是否有新
 let mainWindow = null
 let splashWindow = null
 let setupWizardWindow = null
+let tray = null
 let currentBundleHash = null // 記錄目前載入的前端 bundle hash
 let updateCheckTimer = null
 
@@ -413,6 +414,59 @@ function createMain () {
     stopUpdateCheck()
   })
 
+  // close 事件：攔截並詢問使用者（或套用已記住的偏好）
+  mainWindow.on('close', async (e) => {
+    e.preventDefault()
+    const prefPath = path.join(app.getPath('userData'), 'close-preference.json')
+    let savedPref = null
+    try {
+      if (fs.existsSync(prefPath)) {
+        savedPref = JSON.parse(fs.readFileSync(prefPath, 'utf8')).preference
+      }
+    } catch { savedPref = null }
+
+    if (savedPref === 'minimize') {
+      mainWindow.hide()
+      return
+    }
+    if (savedPref === 'quit') {
+      await stopDockerAndQuit()
+      return
+    }
+
+    // 無記住的偏好 → 顯示對話框
+    const { response, checkboxChecked } = await dialog.showMessageBox(mainWindow, {
+      type: 'question',
+      buttons: ['收到系統匣', '停止服務並退出', '取消'],
+      defaultId: 0,
+      cancelId: 2,
+      title: 'BruV AI',
+      message: '關閉 BruV AI',
+      detail: '收到系統匣：服務繼續運行，下次開啟更快\n停止服務並退出：關閉所有容器，釋放記憶體',
+      checkboxLabel: '記住我的選擇，不再詢問',
+      checkboxChecked: false
+    })
+
+    if (response === 0) {
+      if (checkboxChecked) {
+        try {
+          fs.mkdirSync(path.dirname(prefPath), { recursive: true })
+          fs.writeFileSync(prefPath, JSON.stringify({ preference: 'minimize' }), 'utf8')
+        } catch {}
+      }
+      mainWindow.hide()
+    } else if (response === 1) {
+      if (checkboxChecked) {
+        try {
+          fs.mkdirSync(path.dirname(prefPath), { recursive: true })
+          fs.writeFileSync(prefPath, JSON.stringify({ preference: 'quit' }), 'utf8')
+        } catch {}
+      }
+      await stopDockerAndQuit()
+    }
+    // response === 2 取消：不做任何事
+  })
+
   // 移除原生選單列（改由前端 TitleBar 處理）
   Menu.setApplicationMenu(null)
   setupKeyboardShortcuts()
@@ -423,6 +477,66 @@ function createMain () {
   fetchBundleHash().then(hash => {
     currentBundleHash = hash
     startUpdateCheck()
+  })
+
+  createTray()
+}
+
+// ── 停止 Docker 服務後退出 ───────────────────────────────────────────────────
+async function stopDockerAndQuit () {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.hide()
+  try {
+    await Promise.race([
+      new Promise((resolve) => {
+        exec(`docker compose -f "${composePath}" --env-file "${envPath}" stop`,
+          { timeout: 15000 }, () => resolve())
+      }),
+      new Promise((resolve) => setTimeout(resolve, 15000))
+    ])
+  } catch { /* ignore */ }
+  tray?.destroy()
+  tray = null
+  app.exit(0)
+}
+
+// ── 系統匣 ────────────────────────────────────────────────────────────────────
+function createTray () {
+  if (tray && !tray.isDestroyed()) return
+  const icoPath = path.join(__dirname, 'assets', 'icon.ico')
+  const icon = fs.existsSync(icoPath)
+    ? nativeImage.createFromPath(icoPath)
+    : nativeImage.createEmpty()
+  tray = new Tray(icon.resize({ width: 16, height: 16 }))
+  tray.setToolTip('BruV AI 知識庫')
+
+  const buildMenu = () => Menu.buildFromTemplate([
+    {
+      label: '開啟 BruV AI',
+      click: () => {
+        if (mainWindow) {
+          mainWindow.show()
+          mainWindow.focus()
+        }
+      }
+    },
+    { type: 'separator' },
+    {
+      label: '停止服務並退出',
+      click: () => stopDockerAndQuit()
+    }
+  ])
+
+  tray.setContextMenu(buildMenu())
+
+  tray.on('click', () => {
+    if (mainWindow) {
+      if (mainWindow.isVisible()) {
+        mainWindow.focus()
+      } else {
+        mainWindow.show()
+        mainWindow.focus()
+      }
+    }
   })
 }
 
@@ -476,6 +590,29 @@ function setupIPC () {
   ipcMain.handle('auth:clear-token', () => {
     try {
       const fp = tokenFilePath()
+      if (fs.existsSync(fp)) fs.unlinkSync(fp)
+      return { success: true }
+    } catch (err) {
+      return { success: false, error: err.message }
+    }
+  })
+
+  // ── 關閉偏好 ──
+  const closePrefPath = () => path.join(app.getPath('userData'), 'close-preference.json')
+
+  ipcMain.handle('app:get-close-preference', () => {
+    try {
+      const fp = closePrefPath()
+      if (!fs.existsSync(fp)) return { preference: null }
+      return JSON.parse(fs.readFileSync(fp, 'utf8'))
+    } catch {
+      return { preference: null }
+    }
+  })
+
+  ipcMain.handle('app:reset-close-preference', () => {
+    try {
+      const fp = closePrefPath()
       if (fs.existsSync(fp)) fs.unlinkSync(fp)
       return { success: true }
     } catch (err) {
@@ -1069,21 +1206,12 @@ app.whenReady().then(() => {
   }
 })
 
-app.on('window-all-closed', async () => {
+// window-all-closed：因為 close 事件已 preventDefault 並由 Tray 保持存活，
+// 此事件僅在 mainWindow 尚未建立（setup wizard 階段）時可能觸發，不需處理。
+app.on('window-all-closed', () => {
+  // darwin 以外：Tray 存在時不退出
+  if (process.platform !== 'darwin' && tray && !tray.isDestroyed()) return
   if (process.platform === 'darwin') return
-
-  const { response } = await dialog.showMessageBox({
-    type: 'question',
-    buttons: ['停止服務並退出', '僅關閉視窗'],
-    defaultId: 0,
-    title: 'BruV AI',
-    message: '是否同時停止後台服務？',
-    detail: '停止服務將關閉所有 Docker 容器，下次啟動需要重新等待服務啟動。'
-  })
-  if (response === 0) {
-    // 只 stop 不刪除容器與 volume
-    exec(`docker compose -f "${composePath}" --env-file "${envPath}" stop`)
-  }
   app.quit()
 })
 
