@@ -108,8 +108,9 @@ function ensureEnvFile () {
         // 以 extraResources 放置的 resources/.env 作為初始範本
         fs.copyFileSync(resourcesEnvPath, envPath)
       } else {
-        // 無範本可複製，建立空白檔避免 docker compose 找不到
+        // 無範本可複製，建立空白檔；missingTemplate=true 讓呼叫者顯示警告
         fs.writeFileSync(envPath, '', 'utf8')
+        return { freshlyCreated: true, missingTemplate: true }
       }
     }
     // 隨機化佔位符（幂等：已被替換的欄位不會重生）
@@ -117,7 +118,7 @@ function ensureEnvFile () {
   } catch (err) {
     console.error('[ensureEnvFile] 失敗：', err)
   }
-  return { freshlyCreated }
+  return { freshlyCreated, missingTemplate: false }
 }
 
 // ── .env 全新建立時，必須清除舊有 stateful volume，避免密碼不符 ───────────
@@ -158,19 +159,23 @@ function ensureDataDirs () {
   }
 }
 
-// ── 偵測 NVIDIA GPU；無 GPU 時產生 compose override 移除 ollama GPU 依賴 ──
-const composeOverridePath = path.join(resourcePath, 'docker-compose.override.yml')
+// ── 偵測 NVIDIA GPU；無 GPU 時產生 compose gpu-override 移除 ollama GPU 依賴 ──
+// 寫入 userData 確保有寫入權限（packaged 版 resourcesPath 可能在 Program Files）
+function getGpuOverridePath () {
+  return path.join(app.getPath('userData'), 'docker-compose.gpu-override.yml')
+}
 async function ensureGpuOverride () {
+  const gpuOverridePath = getGpuOverridePath()
   let hasGpu = false
   try {
     await runCommand('nvidia-smi -L', 5000)
     hasGpu = true
   } catch { hasGpu = false }
   if (hasGpu) {
-    if (fs.existsSync(composeOverridePath)) {
-      try { fs.unlinkSync(composeOverridePath) } catch {}
+    if (fs.existsSync(gpuOverridePath)) {
+      try { fs.unlinkSync(gpuOverridePath) } catch {}
     }
-    return
+    return null
   }
   // 沒有 GPU：寫入 override 取消 ollama 的 nvidia 限制
   const overrideYaml = [
@@ -181,8 +186,14 @@ async function ensureGpuOverride () {
     '        reservations: {}',
     ''
   ].join('\n')
-  try { fs.writeFileSync(composeOverridePath, overrideYaml, 'utf8') }
-  catch (err) { console.error('[ensureGpuOverride] 失敗：', err) }
+  try {
+    fs.mkdirSync(path.dirname(gpuOverridePath), { recursive: true })
+    fs.writeFileSync(gpuOverridePath, overrideYaml, 'utf8')
+    return gpuOverridePath
+  } catch (err) {
+    console.error('[ensureGpuOverride] 失敗：', err)
+    return null
+  }
 }
 
 // ── Helper：Promise 包裝 exec ─────────────────────────────────────────────
@@ -303,11 +314,26 @@ async function ensureDockerRunning () {
  */
 async function startDockerServices () {
   updateLoadingStatus('正在啟動容器服務...')
-  ensureEnvFile()
+  const { missingTemplate } = ensureEnvFile()
+  if (missingTemplate) {
+    if (splashWindow && !splashWindow.isDestroyed()) splashWindow.hide()
+    const { response } = await dialog.showMessageBox({
+      type: 'warning',
+      title: 'BruV AI — 設定不完整',
+      message: '找不到 .env.example 範本檔案',
+      detail: '安裝可能不完整，docker 服務可能無法正常啟動。建議重新安裝。\n\n是否仍要繼續？',
+      buttons: ['繼續', '取消'],
+      defaultId: 0,
+      cancelId: 1
+    })
+    if (response === 1) { app.quit(); return false }
+    if (splashWindow && !splashWindow.isDestroyed()) splashWindow.show()
+  }
   ensureDataDirs()
-  await ensureGpuOverride()
-  const upCmd = `docker compose -f "${composePath}" --env-file "${envPath}" up -d --remove-orphans`
-  const downCmd = `docker compose -f "${composePath}" --env-file "${envPath}" down --remove-orphans`
+  const gpuOverridePath = await ensureGpuOverride()
+  const overrideFlag = gpuOverridePath ? ` -f "${gpuOverridePath}"` : ''
+  const upCmd = `docker compose -f "${composePath}"${overrideFlag} --env-file "${envPath}" up -d --remove-orphans`
+  const downCmd = `docker compose -f "${composePath}"${overrideFlag} --env-file "${envPath}" down --remove-orphans`
   const runUp = () => new Promise((resolve, reject) => {
     exec(upCmd, { timeout: 1800000, maxBuffer: 64 * 1024 * 1024 },
       (err, _stdout, stderr) => {
@@ -334,7 +360,7 @@ async function startDockerServices () {
       buttons: ['確定'],
       title: 'BruV AI — 服務啟動失敗',
       message: '無法啟動容器服務',
-      detail: String(err?.message ?? err).slice(0, 500)
+      detail: String(err?.message ?? err).slice(0, 1500)
     })
     app.quit()
     return false
@@ -602,8 +628,36 @@ async function waitForBackend (retries = 0) {
     createMain()
   } catch {
     if (retries >= MAX_RETRIES) {
-      // 超時仍嘗試開啟（可能後端很慢）
-      createMain()
+      updateLoadingStatus('後端啟動逾時，正在收集錯誤資訊...')
+      let logs = ''
+      try {
+        logs = await runCommand(
+          `docker compose -f "${composePath}" --env-file "${envPath}" logs --tail=20 --no-color`,
+          15000
+        )
+      } catch (e) {
+        logs = '（無法取得容器 log：' + (e?.message || String(e)) + '）'
+      }
+      if (splashWindow && !splashWindow.isDestroyed()) splashWindow.hide()
+      const { response } = await dialog.showMessageBox({
+        type: 'error',
+        title: 'BruV AI — 後端啟動逾時',
+        message: '後端服務 60 秒內未回應，可能仍在初始化中。',
+        detail: '容器 Log（最後 20 行）：\n\n' + logs.slice(0, 1500),
+        buttons: ['重試', '繼續開啟（可能無法使用）'],
+        defaultId: 0
+      })
+      if (response === 0) {
+        if (splashWindow && !splashWindow.isDestroyed()) {
+          splashWindow.show()
+        } else {
+          createSplash()
+          await new Promise(r => splashWindow.webContents.once('did-finish-load', r))
+        }
+        waitForBackend(0)
+      } else {
+        createMain()
+      }
       return
     }
     setTimeout(() => waitForBackend(retries + 1), RETRY_INTERVAL_MS)
@@ -807,21 +861,28 @@ function setupSetupIPC (setupCompleteFile) {
 
   // ── Step 6: 啟動容器服務 ──
   ipcMain.handle('setup:startServices', async () => {
-    const { freshlyCreated } = ensureEnvFile()
+    const { freshlyCreated, missingTemplate } = ensureEnvFile()
+    if (missingTemplate) {
+      return { success: false, error: '找不到 .env.example，安裝可能不完整。請重新安裝 BruV AI。' }
+    }
     ensureDataDirs()
-    await ensureGpuOverride()
+    const gpuOverridePath = await ensureGpuOverride()
+    const overrideFlag = gpuOverridePath ? ` -f "${gpuOverridePath}"` : ''
 
-    const upCmd = `docker compose -f "${composePath}" --env-file "${envPath}" up -d --remove-orphans`
-    const downCmd = `docker compose -f "${composePath}" --env-file "${envPath}" down --remove-orphans`
-    const rmConflictCmd = 'docker ps -aq --filter "name=^bruv_ai_" | ForEach-Object { docker rm -f $_ }'
+    const upCmd = `docker compose -f "${composePath}"${overrideFlag} --env-file "${envPath}" up -d --remove-orphans`
+    const downCmd = `docker compose -f "${composePath}"${overrideFlag} --env-file "${envPath}" down --remove-orphans`
+    const rmConflictCmd = `docker ps -aq --filter name=^bruv_ai_`
 
     // 首次/重試都先強制清除殘留同名容器（任何 ai_kb_* 都刪除）
     await new Promise((resolve) => {
       exec(downCmd, { timeout: 120000 }, () => resolve())
     })
-    // 保險上：連同非 compose 產生的 ai_kb_* 也刪掉
+    // 保險上：連同非 compose 產生的 bruv_ai_* 也刪掉
     await new Promise((resolve) => {
-      exec(`powershell -NoProfile -Command "${rmConflictCmd}"`, { timeout: 60000 }, () => resolve())
+      exec(
+        `powershell -NoProfile -Command "& { $ids = (${rmConflictCmd}); if ($ids) { $ids | ForEach-Object { docker rm -f $_ } } }"`,
+        { timeout: 60000 }, () => resolve()
+      )
     })
     // .env 是這次安裝才生成 → 舊 volume 內的密碼會與新 .env 不符，必須清掉
     // ⚠️ 已關閉：.env 現改儲存在 userData，重裝不會遺失，不再需要自動清 volume。
@@ -835,8 +896,8 @@ function setupSetupIPC (setupCompleteFile) {
         (err, _stdout, stderr) => {
           if (err) {
             const msg = (stderr || err.message || '').toString()
-            const tail = msg.split(/\r?\n/).slice(-6).join(' | ')
-            const e = new Error(tail.slice(0, 500))
+            const tail = msg.split(/\r?\n/).slice(-20).join(' | ')
+            const e = new Error(tail.slice(0, 1500))
             e.fullMessage = msg
             reject(e)
           } else resolve()
@@ -848,7 +909,7 @@ function setupSetupIPC (setupCompleteFile) {
       await runUp()
       return { success: true }
     } catch (err) {
-      return { success: false, error: String(err?.message ?? err).slice(0, 500) }
+      return { success: false, error: String(err?.message ?? err).slice(0, 1500) }
     }
   })
 
@@ -872,12 +933,21 @@ function setupSetupIPC (setupCompleteFile) {
         }
       }
     }
-    return { success: false, error: '後端服務無法在 90 秒內啟動' }
+    let logs = ''
+    try {
+      logs = await runCommand(
+        `docker compose -f "${composePath}" --env-file "${envPath}" logs --tail=30 --no-color`,
+        15000
+      )
+    } catch (e) {
+      logs = '（無法取得容器 log）'
+    }
+    return { success: false, error: '後端服務無法在 90 秒內啟動', logs: logs.slice(0, 2000) }
   })
 
-  // ── 初始化管理員帳號（呼叫後端 API）──
+  // ── 初始化管理員帳號（呼叫後端 API，最多重試 3 次）──
   ipcMain.handle('setup:initAdmin', async (_, { email, password }) => {
-    return await new Promise((resolve) => {
+    const tryOnce = () => new Promise((resolve) => {
       const data = JSON.stringify({ email, password })
       const req = http.request({
         hostname: 'localhost',
@@ -908,11 +978,20 @@ function setupSetupIPC (setupCompleteFile) {
       req.write(data)
       req.end()
     })
+    let lastResult = { success: false, error: 'init-admin 未執行' }
+    for (let attempt = 0; attempt < 4; attempt++) {
+      if (attempt > 0) await new Promise(r => setTimeout(r, 3000))
+      lastResult = await tryOnce()
+      if (lastResult.success || lastResult.status === 403) return lastResult
+      console.warn(`[setup:initAdmin] 第 ${attempt + 1} 次嘗試失敗：`, lastResult.error)
+    }
+    return lastResult
   })
 
   // ── Step 6: 完成設定，寫入標記，開啟主視窗 ──
   ipcMain.handle('setup:completeSetup', async () => {
     try {
+      fs.mkdirSync(path.dirname(setupCompleteFile), { recursive: true })
       fs.writeFileSync(
         setupCompleteFile,
         JSON.stringify({ completedAt: new Date().toISOString() }),
@@ -1036,7 +1115,19 @@ function setupAutoUpdater () {
       buttons: ['立即重啟', '稍後'],
       defaultId: 0
     })
-    if (response === 0) autoUpdater.quitAndInstall()
+    if (response === 0) {
+      // 等待 docker compose stop 完成後再安裝，避免容器資料在更新中損毀（最多等 10s）
+      try {
+        await Promise.race([
+          new Promise((resolve) => {
+            exec(`docker compose -f "${composePath}" --env-file "${envPath}" stop`,
+              { timeout: 10000 }, () => resolve())
+          }),
+          new Promise((resolve) => setTimeout(resolve, 10000))
+        ])
+      } catch { /* ignore */ }
+      autoUpdater.quitAndInstall()
+    }
   })
 
   // 啟動 5 秒後檢查一次

@@ -671,7 +671,7 @@
 
   <div class="btn-row" id="completion-retry-row" style="display:none">
     <button class="btn btn-secondary" onclick="showStep(5)">返回設定</button>
-    <button class="btn btn-primary" onclick="onEnterCompletion()">重新嘗試</button>
+    <button class="btn btn-primary" onclick="retryFromBackend()">重新嘗試</button>
   </div>
 </div>
 
@@ -1083,8 +1083,9 @@
     setCstep('backend', 'running', '等待後端回應...')
     const beResult = await window.setupBridge.waitForBackend()
     if (!beResult.success) {
+      const logDetail = beResult.logs ? '\n\nLog：\n' + beResult.logs.slice(0, 500) : ''
       setCstep('backend', 'error', beResult.error || '後端無法啟動')
-      showCompletionError('後端啟動逾時，請重新嘗試。')
+      showCompletionError('後端啟動逾時，請重新嘗試。' + logDetail)
       return
     }
     setCstep('backend', 'done', '後端已就緒')
@@ -1115,6 +1116,38 @@
     banner.textContent = msg
     banner.classList.add('visible')
     document.getElementById('completion-retry-row').style.display = 'flex'
+  }
+
+  // 只重試 waitForBackend + initAdmin + completeSetup，不重新 down+up
+  async function retryFromBackend () {
+    document.getElementById('completion-retry-row').style.display = 'none'
+    document.getElementById('completion-error-banner').classList.remove('visible')
+    document.getElementById('completion-desc').textContent = '正在重試，請稍候...'
+
+    setCstep('backend', 'running', '等待後端回應...')
+    const beResult = await window.setupBridge.waitForBackend()
+    if (!beResult.success) {
+      const logDetail = beResult.logs ? '\n\nLog：\n' + beResult.logs.slice(0, 500) : ''
+      setCstep('backend', 'error', beResult.error || '後端無法啟動')
+      showCompletionError('後端啟動逾時，請重新嘗試。' + logDetail)
+      return
+    }
+    setCstep('backend', 'done', '後端已就緒')
+
+    if (adminCreds.email && adminCreds.password) {
+      const initResult = await window.setupBridge.initAdmin(
+        adminCreds.email, adminCreds.password
+      )
+      if (!initResult.success && initResult.status !== 403) {
+        showCompletionError('管理員帳號設定失敗：' + (initResult.error || '未知錯誤'))
+        return
+      }
+    }
+
+    setCstep('open', 'running', '正在開啟主視窗...')
+    await window.setupBridge.completeSetup()
+    setCstep('open', 'done', '即將顯示主視窗')
+    document.getElementById('completion-desc').textContent = '設定完成！歡迎使用 BruV AI。'
   }
 </script>
 </body>
