@@ -1,6 +1,6 @@
 {
   "name": "bruv-ai-kb",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "BruV AI 知識庫 — 桌面版",
   "main": "main.js",
   "scripts": {
@@ -26,7 +26,7 @@
     ],
     "extraResources": [
       {
-        "from": "../docker-compose.yml",
+        "from": "../docker-compose.release.yml",
         "to": "docker-compose.yml"
       },
       {
