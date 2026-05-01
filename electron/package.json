@@ -1,6 +1,6 @@
 {
   "name": "bruv-ai-kb",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "BruV AI 知識庫 — 桌面版",
   "main": "main.js",
   "scripts": {
@@ -54,8 +54,7 @@
       "provider": "github",
       "owner": "brucecheng886-png",
       "repo": "BruV-AI-",
-      "private": true,
-      "token": "${env.GH_TOKEN}"
+      "releaseType": "release"
     }
   },
   "devDependencies": {
