@@ -357,8 +357,17 @@ async function startDockerServices () {
       await runUp()
     } catch (err) {
       const msg = (err.stderr || err.message || '').toString()
-      if (/is already in use by container|Conflict\.|name .* is already in use/i.test(msg)) {
+      if (/is already in use by container|Conflict\.|name .* is already in use|was not created for project/i.test(msg)) {
+        // 強制清除所有 bruv_ai_* 容器（不論 project name），解決跨版本 project name 遷移衝突
         await new Promise((resolve) => exec(downCmd, { timeout: 120000 }, () => resolve()))
+        await new Promise((resolve) => {
+          exec(
+            `powershell -NoProfile -Command "& { $ids = docker ps -aq --filter name=bruv_ai_; if ($ids) { $ids | ForEach-Object { docker rm -f $_ } } }"`,
+            { timeout: 60000 }, () => resolve()
+          )
+        })
+        // 移除殘留的 bruv_ai_network（可能屬於其他 project）
+        await new Promise((resolve) => exec('docker network rm bruv_ai_network', { timeout: 15000 }, () => resolve()))
         await runUp()
       } else {
         throw err
