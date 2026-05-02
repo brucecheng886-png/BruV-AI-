@@ -343,7 +343,7 @@ async function startDockerServices () {
   ensureDataDirs()
   const gpuOverridePath = await ensureGpuOverride()
   const overrideFlag = gpuOverridePath ? ` -f "${gpuOverridePath}"` : ''
-  const upCmd = `docker compose -f "${composePath}"${overrideFlag} --env-file "${envPath}" up -d --pull always --remove-orphans`
+  const upCmd = `docker compose -f "${composePath}"${overrideFlag} --env-file "${envPath}" up -d --remove-orphans`
   const downCmd = `docker compose -f "${composePath}"${overrideFlag} --env-file "${envPath}" down --remove-orphans`
   const runUp = () => new Promise((resolve, reject) => {
     exec(upCmd, { timeout: 1800000, maxBuffer: 64 * 1024 * 1024 },
