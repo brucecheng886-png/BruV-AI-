@@ -79,6 +79,7 @@
   skip_docker:
 
   ; 清除 userData（setup-complete.json、.env、token.enc 等），確保重裝後進入 setup wizard
-  ; 使用 PowerShell Remove-Item 強制遞迴刪除，比 RMDir 更可靠（避免殘留鎖定的 Chromium cache）
-  nsExec::Exec `powershell -NoProfile -WindowStyle Hidden -Command "Remove-Item -LiteralPath '$APPDATA\BruV AI' -Recurse -Force -ErrorAction SilentlyContinue"`
+  ; ⚠️ Electron userData 路徑 = $APPDATA\{package.json "name"} = $APPDATA\bruv-ai-kb
+  ;    （不是 productName "BruV AI"，過去刪錯路徑導致 setup-complete.json 殘留）
+  nsExec::Exec `powershell -NoProfile -WindowStyle Hidden -Command "Remove-Item -LiteralPath '$APPDATA\bruv-ai-kb' -Recurse -Force -ErrorAction SilentlyContinue"`
 !macroend
