@@ -827,7 +827,9 @@ function createSetupWizard () {
   setupWizardWindow = new BrowserWindow({
     width: 800,
     height: 820,
-    resizable: false,
+    minWidth: 800,
+    minHeight: 820,
+    resizable: true,
     frame: false,
     title: 'BruV AI — 初始設定',
     webPreferences: {

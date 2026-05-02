@@ -24,7 +24,7 @@
     }
 
     html, body {
-      width: 800px; height: 820px; overflow: hidden;
+      width: 100vw; height: 100vh; overflow: hidden;
       background: var(--bg);
       color: var(--text);
       font-family: -apple-system, "Microsoft JhengHei", "Segoe UI", sans-serif;
@@ -82,8 +82,8 @@
       flex-direction: column;
       align-items: center;
       padding: 0 0 24px;
-      height: calc(820px - 80px - 38px);
-      overflow-y: hidden;
+      height: calc(100vh - 118px);
+      overflow-y: auto;
     }
     .step.active { display: flex; }
 
@@ -405,9 +405,12 @@
       width: 13px; height: 13px;
       border-radius: 50%; border: none;
       cursor: pointer; outline: none;
-      transition: opacity 0.15s; flex-shrink: 0;
+      transition: filter 0.15s; flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 7px; font-weight: 700; line-height: 1;
+      color: rgba(0,0,0,0);
     }
-    .tbar-btn:hover { opacity: 0.75; }
+    .tbar-btn:hover { filter: brightness(0.8); color: rgba(0,0,0,0.6); }
     .tbar-btn-red    { background: #ef4444; }
     .tbar-btn-yellow { background: #f59e0b; }
     .tbar-btn-green  { background: #10b981; }
@@ -422,7 +425,7 @@
     /* ── Wizard Wrap ─────────────────────────────────────────── */
     .wizard-wrap {
       padding: 0 32px;
-      height: calc(820px - 38px);
+      height: calc(100vh - 38px);
       display: flex; flex-direction: column;
       overflow: hidden;
     }
@@ -433,9 +436,9 @@
 <div class="titlebar">
   <span class="titlebar-title">BruV AI — 初始設定</span>
   <div class="titlebar-btns">
-    <button class="tbar-btn tbar-btn-yellow" id="btn-minimize" title="最小化"></button>
-    <button class="tbar-btn tbar-btn-green"  id="btn-maximize" title="最大化"></button>
-    <button class="tbar-btn tbar-btn-red"    id="btn-close"    title="關閉"></button>
+    <button class="tbar-btn tbar-btn-yellow" id="btn-minimize" title="最小化">─</button>
+    <button class="tbar-btn tbar-btn-green"  id="btn-maximize" title="最大化">□</button>
+    <button class="tbar-btn tbar-btn-red"    id="btn-close"    title="關閉">✕</button>
   </div>
 </div>
 <!-- Main Content -->
@@ -584,6 +587,12 @@
     </div>
   </div>
 
+  <!-- Ollama 檢測進度條 -->
+  <div class="prog-indet-wrap" id="ollama-check-prog" style="display:none; width:100%">
+    <div class="prog-indet-label">正在偵測 Ollama 安裝狀況...</div>
+    <div class="prog-indet"><div class="prog-indet-fill"></div></div>
+  </div>
+
   <!-- 未安裝 Ollama 提示 -->
   <div id="ollama-not-installed" style="display:none; width:100%; margin-bottom:12px;">
     <div class="step-desc" style="text-align:left; margin-bottom:10px;">
@@ -594,7 +603,7 @@
         onclick="window.setupBridge.openExternal('https://ollama.com/download')">
         下載 Ollama
       </button>
-      <button class="btn btn-secondary" onclick="onEnterOllama()">
+      <button class="btn btn-secondary" id="btn-ollama-recheck" onclick="onEnterOllama()">
         我已安裝完成
       </button>
     </div>
@@ -876,18 +885,21 @@
   // ── Step 2: Docker Installation ───────────────────────────
   async function onEnterDockerCheck () {
     document.getElementById('docker-not-installed').style.display = 'none'
-    const icon  = document.getElementById('docker-install-icon')
-    const label = document.getElementById('docker-install-label')
-    const sub   = document.getElementById('docker-install-sub')
+    const icon     = document.getElementById('docker-install-icon')
+    const label    = document.getElementById('docker-install-label')
+    const sub      = document.getElementById('docker-install-sub')
+    const recheckBtn = document.querySelector('#docker-not-installed .btn-secondary')
 
     setIcon(icon, 'checking')
     label.textContent = '正在檢測 Docker...'
     sub.textContent   = ''
     document.getElementById('docker-check-prog').style.display = 'block'
+    if (recheckBtn) recheckBtn.disabled = true
 
     try {
       const result = await window.setupBridge.checkDocker()
       document.getElementById('docker-check-prog').style.display = 'none'
+      if (recheckBtn) recheckBtn.disabled = false
       if (result.installed) {
         setIcon(icon, 'success')
         label.textContent = 'Docker 已安裝'
@@ -901,6 +913,7 @@
       }
     } catch (e) {
       document.getElementById('docker-check-prog').style.display = 'none'
+      if (recheckBtn) recheckBtn.disabled = false
       setIcon(icon, 'error')
       label.textContent = '偵測失敗'
       sub.textContent   = String(e?.message || e)
@@ -989,16 +1002,21 @@
   async function onEnterOllama () {
     document.getElementById('ollama-not-installed').style.display = 'none'
     document.getElementById('model-section').style.display = 'none'
-    const icon  = document.getElementById('ollama-check-icon')
-    const label = document.getElementById('ollama-check-label')
-    const sub   = document.getElementById('ollama-check-sub')
+    const icon        = document.getElementById('ollama-check-icon')
+    const label       = document.getElementById('ollama-check-label')
+    const sub         = document.getElementById('ollama-check-sub')
+    const recheckBtn  = document.getElementById('btn-ollama-recheck')
+    const progBar     = document.getElementById('ollama-check-prog')
 
     setIcon(icon, 'checking')
     label.textContent = '正在檢測 Ollama...'
     sub.textContent   = ''
+    if (progBar)    progBar.style.display    = 'block'
+    if (recheckBtn) recheckBtn.disabled = true
 
     try {
       const result = await window.setupBridge.checkOllama()
+      if (progBar) progBar.style.display = 'none'
       if (result.installed) {
         setIcon(icon, 'success')
         label.textContent = 'Ollama 已安裝'
@@ -1045,12 +1063,16 @@
         } catch { /* 忽略偵測失敗，使用者仍可手動下載 */ }
         refreshModelNext()
       } else {
+        if (progBar)    progBar.style.display    = 'none'
+        if (recheckBtn) recheckBtn.disabled = false
         setIcon(icon, 'error')
         label.textContent = '未偵測到 Ollama'
         sub.textContent   = ''
         document.getElementById('ollama-not-installed').style.display = 'block'
       }
     } catch {
+      if (progBar)    progBar.style.display    = 'none'
+      if (recheckBtn) recheckBtn.disabled = false
       setIcon(icon, 'error')
       label.textContent = '偵測失敗'
       sub.textContent   = ''
