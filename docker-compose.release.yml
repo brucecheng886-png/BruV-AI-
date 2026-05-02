@@ -127,14 +127,7 @@ services:
       - bruv_ai_network
     restart: unless-stopped
     environment:
-      - OLLAMA_NUM_GPU=${OLLAMA_NUM_GPU:-999}
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
+      - OLLAMA_NUM_GPU=${OLLAMA_NUM_GPU:-0}
     healthcheck:
       test: ["CMD", "ollama", "list"]
       interval: 30s

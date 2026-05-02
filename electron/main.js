@@ -210,27 +210,28 @@ async function ensureGpuOverride () {
     await runCommand('nvidia-smi -L', 5000)
     hasGpu = true
   } catch { hasGpu = false }
-  if (hasGpu) {
+
+  if (!hasGpu) {
+    // 無 GPU：確保不殘留舊的 GPU override
     if (fs.existsSync(gpuOverridePath)) {
       try { fs.unlinkSync(gpuOverridePath) } catch {}
     }
     return null
   }
-  // 沒有 GPU：寫入 override 取消 ollama 的 nvidia 限制
-  // runtime: runc  → 直接繞過 nvidia hook，不論 toolkit 版本（含 legacy mode）
-  // NVIDIA_VISIBLE_DEVICES=none → nvidia-container-cli 官方停用方式
-  // OLLAMA_NUM_GPU=0 → 確保 ollama 不嘗試掛載 GPU layer
+
+  // 有 GPU：寫入 override 啟用 nvidia GPU（base compose 預設 CPU）
   const overrideYaml = [
     'services:',
     '  ollama:',
-    '    runtime: runc',
     '    environment:',
-    '      - NVIDIA_VISIBLE_DEVICES=none',
-    '      - OLLAMA_NUM_GPU=0',
+    '      - OLLAMA_NUM_GPU=${OLLAMA_NUM_GPU:-999}',
     '    deploy:',
     '      resources:',
     '        reservations:',
-    '          devices: []',
+    '          devices:',
+    '            - driver: nvidia',
+    '              count: all',
+    '              capabilities: [gpu]',
     ''
   ].join('\n')
   try {
