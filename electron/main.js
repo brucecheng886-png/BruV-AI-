@@ -825,7 +825,7 @@ async function waitForBackend (retries = 0) {
 function createSetupWizard () {
   setupWizardWindow = new BrowserWindow({
     width: 800,
-    height: 600,
+    height: 820,
     resizable: false,
     frame: false,
     title: 'BruV AI — 初始設定',
