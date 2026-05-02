@@ -450,10 +450,8 @@ function createMain () {
     minWidth: 900,
     minHeight: 600,
     show: false,
-    maximizable: false,
     title: 'BruV AI 知識庫',
     titleBarStyle: 'hidden',
-    titleBarOverlay: { color: '#0f0f1a', symbolColor: '#e5e7eb', height: 38 },
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false,

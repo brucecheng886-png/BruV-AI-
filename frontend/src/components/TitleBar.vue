@@ -23,6 +23,18 @@
         </el-dropdown>
       </div>
     </div>
+    <!-- 自訂視窗控制按鈕：最小化 / 全螢幕 / 關閉 -->
+    <div class="titlebar-controls" @mousedown.stop>
+      <button class="wc-btn" @click="call('minimize')" title="最小化">
+        <svg width="10" height="2" viewBox="0 0 10 2"><rect width="10" height="2" rx="1" fill="currentColor"/></svg>
+      </button>
+      <button class="wc-btn" @click="call('maximize')" title="全螢幕">
+        <svg width="10" height="10" viewBox="0 0 10 10"><rect x="0.75" y="0.75" width="8.5" height="8.5" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
+      </button>
+      <button class="wc-btn" @click="call('quit')" title="關閉">
+        <svg width="10" height="10" viewBox="0 0 10 10"><path d="M1.5 1.5 L8.5 8.5 M8.5 1.5 L1.5 8.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+      </button>
+    </div>
   </div>
   <!-- 分隔線：fixed 定位放在 overlay 下方，確保延伸到最右側 -->
   <div class="titlebar-divider" />
@@ -41,11 +53,38 @@ function call(method) {
   border-bottom: none;
   display: flex;
   align-items: center;
+  justify-content: space-between;
   -webkit-app-region: drag;
   user-select: none;
   flex-shrink: 0;
-  /* right side reserved for native window controls (~138px) */
-  padding-right: 145px;
+}
+
+.titlebar-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-right: 10px;
+  -webkit-app-region: no-drag;
+}
+
+.wc-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: none;
+  background: #e4e4e4;
+  color: #555;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.12s, color 0.12s;
+  flex-shrink: 0;
+}
+
+.wc-btn:hover {
+  background: #c8c8c8;
+  color: #222;
 }
 
 .titlebar-left {

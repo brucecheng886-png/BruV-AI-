@@ -402,18 +402,15 @@
       -webkit-app-region: no-drag;
     }
     .tbar-btn {
-      width: 13px; height: 13px;
+      width: 28px; height: 28px;
       border-radius: 50%; border: none;
       cursor: pointer; outline: none;
-      transition: filter 0.15s; flex-shrink: 0;
+      background: #e4e4e4; color: #555;
       display: flex; align-items: center; justify-content: center;
-      font-size: 7px; font-weight: 700; line-height: 1;
-      color: rgba(0,0,0,0);
+      font-size: 11px; font-weight: 600; flex-shrink: 0;
+      transition: background 0.12s, color 0.12s;
     }
-    .tbar-btn:hover { filter: brightness(0.8); color: rgba(0,0,0,0.6); }
-    .tbar-btn-red    { background: #ef4444; }
-    .tbar-btn-yellow { background: #f59e0b; }
-    .tbar-btn-green  { background: #10b981; }
+    .tbar-btn:hover { background: #c8c8c8; color: #222; }
 
     /* ── Docker Pull Progress ────────────────────────────────── */
     .pull-prog-bar-wrap { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
@@ -436,9 +433,8 @@
 <div class="titlebar">
   <span class="titlebar-title">BruV AI — 初始設定</span>
   <div class="titlebar-btns">
-    <button class="tbar-btn tbar-btn-yellow" id="btn-minimize" title="最小化">─</button>
-    <button class="tbar-btn tbar-btn-green"  id="btn-maximize" title="最大化">□</button>
-    <button class="tbar-btn tbar-btn-red"    id="btn-close"    title="關閉">✕</button>
+    <button class="tbar-btn" id="btn-minimize" title="最小化">─</button>
+    <button class="tbar-btn" id="btn-close"    title="關閉">✕</button>
   </div>
 </div>
 <!-- Main Content -->
@@ -1239,7 +1235,6 @@
 
   // ── Title Bar ─────────────────────────────────────────────
   document.getElementById('btn-minimize').addEventListener('click', () => window.setupBridge.minimize())
-  document.getElementById('btn-maximize').addEventListener('click', () => window.setupBridge.maximize())
   document.getElementById('btn-close').addEventListener('click',    () => window.setupBridge.closeWindow())
 
   // ── Step 5: Env Settings ──────────────────────────────────
