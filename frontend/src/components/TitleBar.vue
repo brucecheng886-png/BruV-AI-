@@ -68,8 +68,8 @@ function call(method) {
 }
 
 .wc-btn {
-  width: 28px;
-  height: 28px;
+  width: 22px;
+  height: 22px;
   border-radius: 50%;
   border: none;
   background: #e4e4e4;

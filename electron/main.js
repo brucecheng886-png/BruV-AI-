@@ -1094,7 +1094,7 @@ function setupSetupIPC (setupCompleteFile) {
     const gpuOverridePath = await ensureGpuOverride()
     const overrideFlag = gpuOverridePath ? ` -f "${gpuOverridePath}"` : ''
 
-    const upCmd = `docker compose -p ${COMPOSE_PROJECT} -f "${composePath}"${overrideFlag} --env-file "${envPath}" up -d --pull missing --remove-orphans`
+    const upCmd = `docker compose -p ${COMPOSE_PROJECT} -f "${composePath}"${overrideFlag} --env-file "${envPath}" up -d --pull always --remove-orphans`
     const downCmd = `docker compose -p ${COMPOSE_PROJECT} -f "${composePath}"${overrideFlag} --env-file "${envPath}" down --remove-orphans`
     const rmConflictCmd = `docker ps -aq --filter name=^bruv_ai_`
 
@@ -1118,7 +1118,7 @@ function setupSetupIPC (setupCompleteFile) {
     // 用 spawn 串流 stdout/stderr，即時傳給前端顯示
     const upArgs = ['compose', '-p', COMPOSE_PROJECT, '-f', composePath]
     if (gpuOverridePath) upArgs.push('-f', gpuOverridePath)
-    upArgs.push('--env-file', envPath, 'up', '-d', '--pull', 'missing', '--remove-orphans')
+    upArgs.push('--env-file', envPath, 'up', '-d', '--pull', 'always', '--remove-orphans')
 
     const runUp = () => new Promise((resolve, reject) => {
       const child = spawn('docker', upArgs, { stdio: ['ignore', 'pipe', 'pipe'] })
