@@ -265,7 +265,7 @@ async function checkDocker () {
       detail: '請安裝 Docker Desktop 後重新啟動 BruV AI。'
     })
     if (response === 0) {
-      shell.openExternal('https://www.docker.com/products/docker-desktop/')
+      shell.openExternal('https://desktop.docker.com/win/main/amd64/Docker%20Desktop%20Installer.exe?utm_source=docker&utm_medium=webreferral&utm_campaign=dd-smartbutton&utm_location=module&_gl=1*1e17a7q*_gcl_au*ODIxNTI0NS4xNzc3NjQ0NDEw*_ga*MjEwNzEyMDc2MS4xNzc3NjQ0NDEw*_ga_XJWPQMJYHQ*czE3Nzc3MDM5NjckbzMkZzEkdDE3Nzc3MDM5NzIkajU1JGwwJGgw')
       await dialog.showMessageBox({
         type: 'info',
         buttons: ['確定'],
