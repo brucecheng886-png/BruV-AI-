@@ -82,4 +82,8 @@
   ; ⚠️ Electron userData 路徑 = $APPDATA\{package.json "name"} = $APPDATA\bruv-ai-kb
   ;    （不是 productName "BruV AI"，過去刪錯路徑導致 setup-complete.json 殘留）
   nsExec::Exec `powershell -NoProfile -WindowStyle Hidden -Command "Remove-Item -LiteralPath '$APPDATA\bruv-ai-kb' -Recurse -Force -ErrorAction SilentlyContinue"`
+
+  ; 清除 electron-updater 暫存目錄（$LOCALAPPDATA\bruv-ai-kb-updater）
+  ; 內含已下載的更新安裝程式，不刪除會殘留佔用空間
+  nsExec::Exec `powershell -NoProfile -WindowStyle Hidden -Command "Remove-Item -LiteralPath '$LOCALAPPDATA\bruv-ai-kb-updater' -Recurse -Force -ErrorAction SilentlyContinue"`
 !macroend
