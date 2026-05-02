@@ -1218,7 +1218,7 @@ function setupSetupIPC (setupCompleteFile) {
             catch { resolve({ success: true }) }
           } else {
             let detail = body
-            try { detail = JSON.parse(body).detail || body } catch {}
+            try { const j = JSON.parse(body); detail = j.detail || j.error || body } catch {}
             resolve({ success: false, status: res.statusCode, error: detail })
           }
         })

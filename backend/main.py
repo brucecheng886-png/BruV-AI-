@@ -115,7 +115,7 @@ async def global_exception_handler(request: Request, exc: Exception):
         exc_info=True,
     )
     detail = str(exc) if settings.DEBUG else "內部伺服器錯誤，請聯絡管理員"
-    return JSONResponse(status_code=500, content={"error": detail})
+    return JSONResponse(status_code=500, content={"detail": detail})
 
 # ── 路由掛載 ───────────────────────────────────────────────────
 app.include_router(health.router,       prefix="/api/health",       tags=["health"])
