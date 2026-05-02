@@ -1110,10 +1110,12 @@ function setupSetupIPC (setupCompleteFile) {
       )
     })
     // .env 是這次安裝才生成 → 舊 volume 內的密碼會與新 .env 不符，必須清掉
-    // ⚠️ 已關閉：.env 現改儲存在 userData，重裝不會遺失，不再需要自動清 volume。
-    // if (freshlyCreated) {
-    //   await purgeStatefulVolumes()
-    // }
+    // ⚠️ freshlyCreated=true 代表：從未安裝（首次）或解除安裝後重裝（userData/.env 被刪）
+    //    兩種情況都需要清掉舊 volume，否則 postgres 以舊密碼拒絕新 .env 的連線
+    if (freshlyCreated) {
+      event.sender.send('setup:dockerLog', '偵測到新 .env，正在清除舊資料庫 volume...')
+      await purgeStatefulVolumes()
+    }
 
     // 用 spawn 串流 stdout/stderr，即時傳給前端顯示
     const upArgs = ['compose', '-p', COMPOSE_PROJECT, '-f', composePath]
