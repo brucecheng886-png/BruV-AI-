@@ -561,6 +561,20 @@
     需要下載兩個模型（共約 10GB），請確認網路穩定後開始。
   </div>
 
+  <!-- GPU 偏好選擇 -->
+  <div class="field-group" id="gpu-pref-section" style="display:none; width:100%; margin-bottom:12px;">
+    <label class="field-label">運算模式</label>
+    <div style="display:flex; gap:10px; margin-top:6px;">
+      <label style="display:flex; align-items:center; gap:6px; cursor:pointer; flex:1; padding:10px 12px; border:1px solid var(--border); border-radius:8px; background:var(--surface)">
+        <input type="radio" name="gpu-pref" value="999" checked> <span><b>自動</b><br><span style="font-size:11px; color:var(--text-muted)">有 GPU 盡量用 GPU，不夠再補 CPU</span></span>
+      </label>
+      <label style="display:flex; align-items:center; gap:6px; cursor:pointer; flex:1; padding:10px 12px; border:1px solid var(--border); border-radius:8px; background:var(--surface)">
+        <input type="radio" name="gpu-pref" value="0"> <span><b>純 CPU</b><br><span style="font-size:11px; color:var(--text-muted)">不使用 GPU，速度較慢但穩定</span></span>
+      </label>
+    </div>
+    <div class="field-hint" id="gpu-pref-hint"></div>
+  </div>
+
   <!-- Ollama 安裝狀態 -->
   <div class="status-box" id="ollama-check-box">
     <div class="status-icon checking" id="ollama-check-icon"></div>
@@ -990,6 +1004,18 @@
         label.textContent = 'Ollama 已安裝'
         sub.textContent   = result.version || ''
         document.getElementById('model-section').style.display = 'block'
+        // 顯示 GPU 偏好（偵測 GPU）
+        try {
+          const gpuInfo = await window.setupBridge.detectGpu()
+          const gpuSection = document.getElementById('gpu-pref-section')
+          const gpuHint = document.getElementById('gpu-pref-hint')
+          if (gpuInfo && gpuInfo.hasGpu) {
+            gpuSection.style.display = 'block'
+            gpuHint.textContent = `偵測到 GPU：${gpuInfo.name || 'NVIDIA GPU'}，預設自動混合使用 GPU + CPU`
+          } else {
+            gpuSection.style.display = 'none'
+          }
+        } catch {}
         // 主動偵測已下載的模型，已存在就標記為 done
         try {
           const list = await window.setupBridge.listOllamaModels()
@@ -1267,11 +1293,13 @@
     adminCreds.email    = email
     adminCreds.password = password
 
+    const gpuPrefEl = document.querySelector('input[name="gpu-pref"]:checked')
     const settings = {
       useCloudAI:    document.getElementById('use-cloud-ai').checked,
       anthropicApiKey: document.getElementById('anthropic-key').value.trim(),
       openaiApiKey:    document.getElementById('openai-key').value.trim(),
-      groqApiKey:      document.getElementById('groq-key').value.trim()
+      groqApiKey:      document.getElementById('groq-key').value.trim(),
+      ollamaNumGpu:  gpuPrefEl ? gpuPrefEl.value : '999'
     }
 
     try {

@@ -195,7 +195,8 @@ async function ensureGpuOverride () {
     '  ollama:',
     '    deploy:',
     '      resources:',
-    '        reservations: {}',
+    '        reservations:',
+    '          devices: []',
     ''
   ].join('\n')
   try {
@@ -944,6 +945,17 @@ function setupSetupIPC (setupCompleteFile) {
     }
   })
 
+  // 偵測 NVIDIA GPU（供 wizard Step 4 顯示 GPU 偏好選項）
+  ipcMain.handle('setup:detectGpu', async () => {
+    try {
+      const out = await runCommand('nvidia-smi --query-gpu=name --format=csv,noheader', 5000)
+      const name = out.trim().split('\n')[0].trim()
+      return { hasGpu: true, name: name || 'NVIDIA GPU' }
+    } catch {
+      return { hasGpu: false }
+    }
+  })
+
   // ── Step 4: 列出已安裝的 Ollama 模型（供 wizard 判斷是否跳過 pull）──
   ipcMain.handle('setup:listOllamaModels', async () => {
     try {
@@ -1007,6 +1019,7 @@ function setupSetupIPC (setupCompleteFile) {
     if (settings.anthropicApiKey !== undefined) updates.ANTHROPIC_API_KEY = settings.anthropicApiKey
     if (settings.openaiApiKey   !== undefined) updates.OPENAI_API_KEY     = settings.openaiApiKey
     if (settings.groqApiKey     !== undefined) updates.GROQ_API_KEY       = settings.groqApiKey
+    if (settings.ollamaNumGpu   !== undefined) updates.OLLAMA_NUM_GPU     = settings.ollamaNumGpu
 
     try {
       updateEnvFile(envPath, updates)

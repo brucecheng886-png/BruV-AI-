@@ -15,6 +15,9 @@ contextBridge.exposeInMainWorld('setupBridge', {
   // Step 4: Ollama 安裝檢測
   checkOllama: () => ipcRenderer.invoke('setup:checkOllama'),
 
+  // Step 4: 偵測 NVIDIA GPU（供顯示運算模式選擇）
+  detectGpu: () => ipcRenderer.invoke('setup:detectGpu'),
+
   // Step 4: 列出已安裝模型（用於 wizard 自動跳過）
   listOllamaModels: () => ipcRenderer.invoke('setup:listOllamaModels'),
 

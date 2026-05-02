@@ -126,6 +126,8 @@ services:
     networks:
       - bruv_ai_network
     restart: unless-stopped
+    environment:
+      - OLLAMA_NUM_GPU=${OLLAMA_NUM_GPU:-999}
     deploy:
       resources:
         reservations:
