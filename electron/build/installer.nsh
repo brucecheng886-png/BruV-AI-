@@ -1,7 +1,12 @@
 ; 解除安裝前強制結束 BruV AI 進程，避免檔案鎖定導致解除安裝失敗
 !macro customUnInstall
+  ; 結束主程式與所有 Electron helper 子進程
   nsExec::Exec 'taskkill /F /IM "BruV AI.exe" /T'
-  Sleep 2000
+  nsExec::Exec 'taskkill /F /IM "BruV AI Helper.exe" /T'
+  nsExec::Exec 'taskkill /F /IM "BruV AI Helper (GPU).exe" /T'
+  nsExec::Exec 'taskkill /F /IM "BruV AI Helper (Renderer).exe" /T'
+  nsExec::Exec 'taskkill /F /IM "BruV AI Helper (Plugin).exe" /T'
+  Sleep 3000
 
   ; 用 PowerShell WinForms 顯示有勾選欄位的對話框
   ; Exit Code: 0=什麼都不做  1=刪容器（保留資料）  3=刪容器+資料  99=取消解除安裝
@@ -62,7 +67,8 @@
     Sleep 3000
 
     ; exit code 3 → 進一步刪除所有資料
-    IntCmp $1 3 0 skip_purge skip_purge
+    IntCmp $1 3 do_purge skip_purge skip_purge
+    do_purge:
       nsExec::Exec 'docker compose -p bruv-ai down -v --remove-orphans'
       Sleep 3000
       nsExec::Exec 'powershell -NoProfile -Command "& { $$ids = docker ps -aq --filter name=bruv_ai_; if ($$ids) { $$ids | ForEach-Object { docker rm -f $$_ } } }"'
@@ -73,5 +79,6 @@
   skip_docker:
 
   ; 清除 userData（setup-complete.json、.env、token.enc 等），確保重裝後進入 setup wizard
-  RMDir /r "$APPDATA\BruV AI"
+  ; 使用 PowerShell Remove-Item 強制遞迴刪除，比 RMDir 更可靠（避免殘留鎖定的 Chromium cache）
+  nsExec::Exec `powershell -NoProfile -WindowStyle Hidden -Command "Remove-Item -LiteralPath '$APPDATA\BruV AI' -Recurse -Force -ErrorAction SilentlyContinue"`
 !macroend

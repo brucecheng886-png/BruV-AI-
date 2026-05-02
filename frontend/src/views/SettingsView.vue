@@ -582,7 +582,33 @@
           </el-select>
         </el-form-item>
         <el-form-item label="模型名稱" required>
-          <el-input v-model="modelForm.name" placeholder="如: qwen2.5:7b 或 gpt-4o" />
+          <!-- 有預設清單的 provider：顯示可篩選下拉（仍可自訂輸入） -->
+          <template v-if="MODEL_PRESETS[modelForm.provider]">
+            <el-select
+              v-model="modelForm.name"
+              filterable
+              allow-create
+              default-first-option
+              placeholder="選擇預設模型，或直接輸入自訂名稱"
+              style="width:100%;"
+            >
+              <el-option-group
+                v-for="group in MODEL_PRESETS[modelForm.provider]"
+                :key="group.label"
+                :label="group.label"
+              >
+                <el-option
+                  v-for="m in group.options"
+                  :key="m.value"
+                  :label="m.label"
+                  :value="m.value"
+                />
+              </el-option-group>
+            </el-select>
+            <div style="font-size:11px;color:#999;margin-top:3px;">可直接輸入不在清單中的自訂模型名稱</div>
+          </template>
+          <!-- OpenRouter 或其他 provider：純文字輸入 -->
+          <el-input v-else v-model="modelForm.name" placeholder="如: meta-llama/llama-3.1-8b-instruct" />
         </el-form-item>
         <el-form-item v-if="modelForm.provider === 'ollama'" label="Base URL">
           <el-input v-model="modelForm.base_url" placeholder="http://ollama:11434" />
@@ -797,6 +823,93 @@ const PROVIDER_DEFS = [
   { key: 'openrouter', name: 'OpenRouter', logo: 'https://openrouter.ai/favicon.ico',                                                                                           types: ['chat'] },
   { key: 'anthropic',  name: 'Anthropic Claude', logo: 'https://www.anthropic.com/favicon.ico',                                                                                  types: ['chat'] },
 ]
+
+// 各 Provider 的模型預設清單（支援 filterable + allow-create，仍可手動輸入自訂名稱）
+const MODEL_PRESETS = {
+  ollama: [
+    { label: 'Chat 模型', options: [
+      { label: 'llama3.2:1b',              value: 'llama3.2:1b' },
+      { label: 'llama3.2:3b',              value: 'llama3.2:3b' },
+      { label: 'llama3.1:8b',              value: 'llama3.1:8b' },
+      { label: 'llama3.1:70b',             value: 'llama3.1:70b' },
+      { label: 'qwen2.5:7b',               value: 'qwen2.5:7b' },
+      { label: 'qwen2.5:14b',              value: 'qwen2.5:14b' },
+      { label: 'qwen2.5:32b',              value: 'qwen2.5:32b' },
+      { label: 'qwen2.5:72b',              value: 'qwen2.5:72b' },
+      { label: 'qwen2.5-coder:7b',         value: 'qwen2.5-coder:7b' },
+      { label: 'qwen2.5-coder:14b',        value: 'qwen2.5-coder:14b' },
+      { label: 'gemma3:4b',                value: 'gemma3:4b' },
+      { label: 'gemma3:12b',               value: 'gemma3:12b' },
+      { label: 'gemma3:27b',               value: 'gemma3:27b' },
+      { label: 'phi4:14b',                 value: 'phi4:14b' },
+      { label: 'mistral:7b',               value: 'mistral:7b' },
+      { label: 'mixtral:8x7b',             value: 'mixtral:8x7b' },
+      { label: 'deepseek-r1:7b',           value: 'deepseek-r1:7b' },
+      { label: 'deepseek-r1:14b',          value: 'deepseek-r1:14b' },
+      { label: 'llava:7b（Vision）',        value: 'llava:7b' },
+      { label: 'llava-llama3:8b（Vision）', value: 'llava-llama3:8b' },
+    ]},
+    { label: 'Embedding 模型', options: [
+      { label: 'nomic-embed-text',   value: 'nomic-embed-text' },
+      { label: 'mxbai-embed-large',  value: 'mxbai-embed-large' },
+      { label: 'bge-m3',             value: 'bge-m3' },
+      { label: 'all-minilm',         value: 'all-minilm' },
+    ]},
+  ],
+  anthropic: [
+    { label: 'Claude 4 系列', options: [
+      { label: 'claude-opus-4-5',    value: 'claude-opus-4-5' },
+      { label: 'claude-sonnet-4-5',  value: 'claude-sonnet-4-5' },
+    ]},
+    { label: 'Claude 3.5 系列', options: [
+      { label: 'claude-3-5-sonnet-20241022', value: 'claude-3-5-sonnet-20241022' },
+      { label: 'claude-3-5-haiku-20241022',  value: 'claude-3-5-haiku-20241022' },
+    ]},
+    { label: 'Claude 3 系列', options: [
+      { label: 'claude-3-opus-20240229',   value: 'claude-3-opus-20240229' },
+      { label: 'claude-3-sonnet-20240229', value: 'claude-3-sonnet-20240229' },
+      { label: 'claude-3-haiku-20240307',  value: 'claude-3-haiku-20240307' },
+    ]},
+  ],
+  openai: [
+    { label: 'GPT-4o 系列', options: [
+      { label: 'gpt-4o',       value: 'gpt-4o' },
+      { label: 'gpt-4o-mini',  value: 'gpt-4o-mini' },
+      { label: 'gpt-4-turbo',  value: 'gpt-4-turbo' },
+    ]},
+    { label: 'o 系列（推理）', options: [
+      { label: 'o1',       value: 'o1' },
+      { label: 'o1-mini',  value: 'o1-mini' },
+      { label: 'o3-mini',  value: 'o3-mini' },
+      { label: 'o4-mini',  value: 'o4-mini' },
+    ]},
+    { label: 'Embedding 模型', options: [
+      { label: 'text-embedding-3-small', value: 'text-embedding-3-small' },
+      { label: 'text-embedding-3-large', value: 'text-embedding-3-large' },
+    ]},
+  ],
+  groq: [
+    { label: 'Groq 模型', options: [
+      { label: 'llama-3.3-70b-versatile',            value: 'llama-3.3-70b-versatile' },
+      { label: 'llama-3.1-8b-instant',               value: 'llama-3.1-8b-instant' },
+      { label: 'llama-3.2-90b-vision-preview（Vision）', value: 'llama-3.2-90b-vision-preview' },
+      { label: 'mixtral-8x7b-32768',                 value: 'mixtral-8x7b-32768' },
+      { label: 'gemma2-9b-it',                       value: 'gemma2-9b-it' },
+      { label: 'deepseek-r1-distill-llama-70b',      value: 'deepseek-r1-distill-llama-70b' },
+    ]},
+  ],
+  gemini: [
+    { label: 'Gemini 2.0 系列', options: [
+      { label: 'gemini-2.0-flash',      value: 'gemini-2.0-flash' },
+      { label: 'gemini-2.0-flash-lite', value: 'gemini-2.0-flash-lite' },
+    ]},
+    { label: 'Gemini 1.5 系列', options: [
+      { label: 'gemini-1.5-pro',       value: 'gemini-1.5-pro' },
+      { label: 'gemini-1.5-flash',     value: 'gemini-1.5-flash' },
+      { label: 'gemini-1.5-flash-8b',  value: 'gemini-1.5-flash-8b' },
+    ]},
+  ],
+}
 const failedLogos = ref(new Set())
 function onLogoError(key) { failedLogos.value = new Set([...failedLogos.value, key]) }
 const selectedProvider = ref(null)
@@ -1046,6 +1159,7 @@ const verifyMsg    = ref('')
 
 function onProviderChange(val) {
   if (val === 'ollama' && !modelForm.base_url) modelForm.base_url = 'http://ollama:11434'
+  modelForm.name = ''   // 切換 provider 時清空，讓使用者從新清單選擇
   verifyStatus.value = ''
   verifyMsg.value = ''
 }
