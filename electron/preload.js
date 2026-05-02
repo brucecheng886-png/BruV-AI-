@@ -20,4 +20,5 @@ contextBridge.exposeInMainWorld('electronAPI', {
   clearToken: ()      => ipcRenderer.invoke('auth:clear-token'),
   getClosePreference:   () => ipcRenderer.invoke('app:get-close-preference'),
   resetClosePreference: () => ipcRenderer.invoke('app:reset-close-preference'),
+  relaunchForUpdate:    () => ipcRenderer.send('relaunch-for-update'),
 })

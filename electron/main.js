@@ -623,6 +623,7 @@ function setupIPC () {
   ipcMain.on('win-minimize',     () => mainWindow?.minimize())
   ipcMain.on('win-maximize',     () => mainWindow?.isMaximized() ? mainWindow.unmaximize() : mainWindow.maximize())
   ipcMain.on('win-quit',         () => app.quit())
+  ipcMain.on('relaunch-for-update', () => { autoUpdater.quitAndInstall() })
   ipcMain.on('win-set-theme', (_, theme) => {
     if (!mainWindow || typeof mainWindow.setTitleBarOverlay !== 'function') return
     if (theme === 'dark') {

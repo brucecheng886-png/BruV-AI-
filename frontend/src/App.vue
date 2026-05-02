@@ -2,8 +2,14 @@
   <div v-if="authStore.token" class="app-root">
     <TitleBar v-if="isElectron" />
     <!-- 更新通知橫幅 -->
-    <div v-if="updateInfo" class="update-banner">
-      🎉 新版本 v{{ updateInfo.version }} 下載中，完成後將提示重啟
+    <div v-if="updateInfo" class="update-banner" :class="{ 'update-banner--ready': updateInfo.ready }">
+      <template v-if="!updateInfo.ready">
+        ⬇️ 新版本 v{{ updateInfo.version }} 下載中…
+      </template>
+      <template v-else>
+        ✅ 新版本 v{{ updateInfo.version }} 已就緒，重啟後套用
+        <button class="update-banner-btn" @click="relaunchApp">立即重啟</button>
+      </template>
       <button class="update-banner-close" @click="updateInfo = null">✕</button>
     </div>
     <div class="app-body" :style="{ '--agent-panel-w': (agentPanelOpen && showAgentPanel) ? '380px' : '0px' }">
@@ -54,10 +60,19 @@ function applyTitleBarTheme (token) {
 
 watch(() => authStore.token, applyTitleBarTheme)
 
+function relaunchApp () {
+  window.electronAPI?.relaunchForUpdate?.()
+}
+
 onMounted(() => {
   if (window.electronApp?.version) {
     document.documentElement.classList.add('electron-app')
-    window.electronApp.onUpdateAvailable?.((info) => { updateInfo.value = info })
+    window.electronApp.onUpdateAvailable?.((info) => {
+      updateInfo.value = { ...info, ready: false }
+    })
+    window.electronApp.onUpdateDownloaded?.((info) => {
+      updateInfo.value = { ...info, ready: true }
+    })
   }
   applyTitleBarTheme(authStore.token)
 })
@@ -86,7 +101,22 @@ html.electron-app { --titlebar-h: 38px; }
   gap: 8px;
   flex-shrink: 0;
   z-index: 9999;
+  transition: background 0.3s;
 }
+.update-banner--ready {
+  background: #2f9e44;
+}
+.update-banner-btn {
+  background: rgba(255,255,255,0.2);
+  border: 1px solid rgba(255,255,255,0.5);
+  color: #fff;
+  border-radius: 4px;
+  padding: 2px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  margin-left: 4px;
+}
+.update-banner-btn:hover { background: rgba(255,255,255,0.35); }
 .update-banner-close {
   margin-left: auto;
   background: transparent;
