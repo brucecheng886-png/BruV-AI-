@@ -3,6 +3,8 @@ import { useAuthStore } from '../stores/auth.js'
 
 const routes = [
   { path: '/login', component: () => import('../views/LoginView.vue') },
+  { path: '/forgot-password', component: () => import('../views/ForgotPasswordView.vue') },
+  { path: '/reset-password',  component: () => import('../views/ResetPasswordView.vue') },
   { path: '/', redirect: '/chat' },
   { path: '/chat', component: () => import('../views/ChatView.vue'), meta: { requiresAuth: true } },
   { path: '/docs', component: () => import('../views/DocsView.vue'), meta: { requiresAuth: true } },

@@ -1342,6 +1342,7 @@ function setupAutoUpdater () {
   }
   autoUpdater.on('update-available', (info) => {
     console.log('[autoUpdater] 偵測到新版本：', info.version)
+    mainWindow?.webContents.send('update-available', { version: info.version })
   })
   autoUpdater.on('update-not-available', () => {
     console.log('[autoUpdater] 已是最新版本')
@@ -1353,6 +1354,7 @@ function setupAutoUpdater () {
     console.log(`[autoUpdater] 下載中 ${Math.round(p.percent)}%`)
   })
   autoUpdater.on('update-downloaded', async (info) => {
+    mainWindow?.webContents.send('update-downloaded', { version: info.version })
     const { response } = await dialog.showMessageBox({
       type: 'info',
       title: 'BruV AI 更新',

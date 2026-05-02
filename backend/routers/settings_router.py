@@ -15,7 +15,10 @@ POST /api/settings/user/change-password 修改密碼
 import gzip
 import json
 import logging
+import smtplib
+import ssl as _ssl
 from datetime import datetime, timezone
+from email.mime.text import MIMEText
 from typing import Optional
 
 import httpx
@@ -24,7 +27,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from auth import CurrentUser, hash_password, verify_password
+from auth import CurrentUser, CurrentAdmin, hash_password, verify_password
 from config import settings as app_settings
 from database import get_db
 from models import SystemSetting, User
@@ -701,4 +704,134 @@ async def save_chat_settings(
             db.add(SystemSetting(key=k, value=v))
     await db.commit()
     return {"ok": True}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SMTP 郵件設定（管理員專用）
+# GET  /api/settings/smtp         讀取 SMTP 設定（密碼遮蔽）
+# PUT  /api/settings/smtp         儲存 SMTP 設定
+# POST /api/settings/smtp/test    傳送測試郵件
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_SMTP_KEYS = ["smtp_host", "smtp_port", "smtp_user", "smtp_password", "smtp_from_name", "smtp_tls"]
+_SMTP_DEFAULTS: dict[str, str] = {
+    "smtp_host":      "",
+    "smtp_port":      "587",
+    "smtp_user":      "",
+    "smtp_password":  "",
+    "smtp_from_name": "BruV AI",
+    "smtp_tls":       "true",
+}
+
+
+class SmtpSettingsOut(BaseModel):
+    smtp_host:      str = ""
+    smtp_port:      int = 587
+    smtp_user:      str = ""
+    smtp_password:  str = ""
+    smtp_from_name: str = "BruV AI"
+    smtp_tls:       bool = True
+
+
+class SmtpSettingsIn(BaseModel):
+    smtp_host:      str
+    smtp_port:      int = 587
+    smtp_user:      str = ""
+    smtp_password:  str = ""
+    smtp_from_name: str = "BruV AI"
+    smtp_tls:       bool = True
+
+
+async def _read_smtp(db: AsyncSession) -> dict:
+    result = await db.execute(
+        select(SystemSetting).where(SystemSetting.key.in_(_SMTP_KEYS))
+    )
+    rows = {r.key: r.value for r in result.scalars()}
+    return {k: rows.get(k, v) for k, v in _SMTP_DEFAULTS.items()}
+
+
+@router.get("/smtp", response_model=SmtpSettingsOut)
+async def get_smtp_settings(
+    db: AsyncSession = Depends(get_db),
+    current_user: CurrentAdmin = None,
+):
+    cfg = await _read_smtp(db)
+    return SmtpSettingsOut(
+        smtp_host=cfg["smtp_host"],
+        smtp_port=int(cfg["smtp_port"]),
+        smtp_user=cfg["smtp_user"],
+        smtp_password="***" if cfg["smtp_password"] else "",
+        smtp_from_name=cfg["smtp_from_name"],
+        smtp_tls=cfg["smtp_tls"].lower() in ("1", "true", "on", "yes"),
+    )
+
+
+@router.put("/smtp")
+async def save_smtp_settings(
+    body: SmtpSettingsIn,
+    db: AsyncSession = Depends(get_db),
+    current_user: CurrentAdmin = None,
+):
+    if not (1 <= body.smtp_port <= 65535):
+        raise HTTPException(status_code=400, detail="Port 需介於 1 ~ 65535")
+
+    smtp_updates: dict[str, str] = {
+        "smtp_host":      body.smtp_host,
+        "smtp_port":      str(body.smtp_port),
+        "smtp_user":      body.smtp_user,
+        "smtp_from_name": body.smtp_from_name,
+        "smtp_tls":       "true" if body.smtp_tls else "false",
+    }
+    if body.smtp_password and body.smtp_password != "***":
+        smtp_updates["smtp_password"] = body.smtp_password
+
+    for k, v in smtp_updates.items():
+        existing = await db.get(SystemSetting, k)
+        if existing:
+            existing.value = v
+        else:
+            db.add(SystemSetting(key=k, value=v))
+    await db.commit()
+    return {"ok": True}
+
+
+@router.post("/smtp/test")
+async def test_smtp(
+    db: AsyncSession = Depends(get_db),
+    current_user: CurrentAdmin = None,
+):
+    cfg = await _read_smtp(db)
+    host = cfg["smtp_host"]
+    port = int(cfg["smtp_port"])
+    user = cfg["smtp_user"]
+    password = cfg["smtp_password"]
+    from_name = cfg["smtp_from_name"]
+    use_tls = cfg["smtp_tls"].lower() in ("1", "true", "on", "yes")
+
+    if not host:
+        raise HTTPException(status_code=400, detail="SMTP 主機尚未設定")
+
+    to_email = current_user.email
+    msg = MIMEText("這是 BruV AI 的 SMTP 測試信，設定正確！", "plain", "utf-8")
+    msg["Subject"] = "BruV AI SMTP 測試"
+    msg["From"] = f"{from_name} <{user}>" if user else from_name
+    msg["To"] = to_email
+
+    try:
+        if use_tls:
+            context = _ssl.create_default_context()
+            with smtplib.SMTP(host, port, timeout=10) as smtp:
+                smtp.starttls(context=context)
+                if user and password:
+                    smtp.login(user, password)
+                smtp.sendmail(user or from_name, [to_email], msg.as_bytes())
+        else:
+            with smtplib.SMTP(host, port, timeout=10) as smtp:
+                if user and password:
+                    smtp.login(user, password)
+                smtp.sendmail(user or from_name, [to_email], msg.as_bytes())
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"SMTP 發送失敗：{e}")
+
+    return {"ok": True, "message": f"測試郵件已寄送至 {to_email}"}
 

@@ -17,7 +17,6 @@
           <template #dropdown>
             <el-dropdown-menu>
               <el-dropdown-item @click="call('minimize')">最小化</el-dropdown-item>
-              <el-dropdown-item @click="call('maximize')">最大化 / 還原</el-dropdown-item>
               <el-dropdown-item divided @click="call('quit')">離開</el-dropdown-item>
             </el-dropdown-menu>
           </template>

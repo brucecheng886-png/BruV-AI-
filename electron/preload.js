@@ -1,7 +1,7 @@
 const { contextBridge, ipcRenderer } = require('electron')
 
 contextBridge.exposeInMainWorld('electronApp', {
-  version: process.versions.electron,
+  version: require('./package.json').version,
   reload:       () => ipcRenderer.send('win-reload'),
   forceReload:  () => ipcRenderer.send('win-force-reload'),
   toggleDevTools: () => ipcRenderer.send('win-devtools'),
@@ -9,6 +9,8 @@ contextBridge.exposeInMainWorld('electronApp', {
   maximize:     () => ipcRenderer.send('win-maximize'),
   quit:         () => ipcRenderer.send('win-quit'),
   setTheme:     (theme) => ipcRenderer.send('win-set-theme', theme),
+  onUpdateAvailable:  (cb) => ipcRenderer.on('update-available',  (_, info) => cb(info)),
+  onUpdateDownloaded: (cb) => ipcRenderer.on('update-downloaded', (_, info) => cb(info)),
 })
 
 // Token 持久化（safeStorage）

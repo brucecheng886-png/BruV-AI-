@@ -97,6 +97,7 @@
           </button>
 
           <p v-if="error" class="error-msg">{{ error }}</p>
+          <p class="forgot-link"><router-link to="/forgot-password">忘記密碼？</router-link></p>
         </form>
       </div>
     </div>
@@ -313,6 +314,19 @@ async function handleLogin () {
   color: #f87171;
   font-size: 13px;
   text-align: center;
+}
+
+.forgot-link {
+  margin: 8px 0 0;
+  text-align: right;
+  font-size: 13px;
+}
+.forgot-link a {
+  color: #6b7fff;
+  text-decoration: none;
+}
+.forgot-link a:hover {
+  text-decoration: underline;
 }
 
 /* ── 響應式 ──────────────────────────────────────── */

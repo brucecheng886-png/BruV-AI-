@@ -521,6 +521,51 @@
       </template>
     </div>
 
+      <!-- ── 郵件通知（SMTP 設定，管理員專用）──────────────────────────── -->
+      <template v-if="activeGroup === 'email'">
+        <div class="settings-section">
+          <div class="section-header">
+            <Mail :size="16" :stroke-width="1.5" class="section-icon" />
+            <span>SMTP 郵件設定</span>
+          </div>
+          <div class="section-body">
+            <el-form :model="smtpForm" label-width="110px" class="smtp-form">
+              <el-form-item label="SMTP 主機">
+                <el-input v-model="smtpForm.smtp_host" placeholder="smtp.gmail.com" style="width:280px;" />
+              </el-form-item>
+              <el-form-item label="連接埠">
+                <el-input-number v-model="smtpForm.smtp_port" :min="1" :max="65535" style="width:120px;" />
+              </el-form-item>
+              <el-form-item label="使用者名稱">
+                <el-input v-model="smtpForm.smtp_user" placeholder="your@email.com" style="width:280px;" />
+              </el-form-item>
+              <el-form-item label="密碼">
+                <el-input
+                  v-model="smtpForm.smtp_password"
+                  type="password"
+                  show-password
+                  placeholder="留空表示不變更"
+                  style="width:280px;"
+                />
+              </el-form-item>
+              <el-form-item label="寄件者名稱">
+                <el-input v-model="smtpForm.smtp_from_name" placeholder="BruV AI" style="width:200px;" />
+              </el-form-item>
+              <el-form-item label="啟用 STARTTLS">
+                <el-switch v-model="smtpForm.smtp_tls" active-text="啟用" inactive-text="停用" />
+              </el-form-item>
+              <el-form-item>
+                <el-button type="primary" :loading="smtpSaving" @click="saveSmtp">儲存設定</el-button>
+                <el-button :loading="smtpTesting" @click="testSmtp">測試發送</el-button>
+              </el-form-item>
+              <el-form-item v-if="smtpMsg">
+                <el-alert :title="smtpMsg" :type="smtpMsgType" show-icon :closable="false" />
+              </el-form-item>
+            </el-form>
+          </div>
+        </div>
+      </template>
+
     <!-- Add / Edit Dialog -->
     <el-dialog v-model="showAddDialog" :title="editingId ? '編輯模型' : '新增模型'" width="600px" @closed="onDialogClosed">
       <el-form :model="modelForm" label-width="110px">
@@ -600,7 +645,7 @@
 import { ref, onMounted, onActivated, reactive, defineComponent, computed } from 'vue'
 import { useRoute } from 'vue-router'
 import { Refresh, Check } from '@element-plus/icons-vue'
-import { Layers, FolderOpen, MessageSquare, Network, Puzzle, Settings, Dna, Cpu, Key, Sliders, HardDrive, Database, Bot, User, Link, BookOpen } from 'lucide-vue-next'
+import { Layers, FolderOpen, MessageSquare, Network, Puzzle, Settings, Dna, Cpu, Key, Sliders, HardDrive, Database, Bot, User, Link, BookOpen, Mail } from 'lucide-vue-next'
 import { wikiApi, systemSettingsApi, agentSkillsApi, monitoringApi, authApi } from '../api/index.js'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuthStore } from '../stores/auth.js'
@@ -635,15 +680,97 @@ function reloadPage() {
   window.location.reload()
 }
 
+// ── SMTP 設定 ─────────────────────────────────────────────────────────────────
+const smtpForm = reactive({
+  smtp_host:      '',
+  smtp_port:      587,
+  smtp_user:      '',
+  smtp_password:  '',
+  smtp_from_name: 'BruV AI',
+  smtp_tls:       true,
+})
+const smtpSaving  = ref(false)
+const smtpTesting = ref(false)
+const smtpMsg     = ref('')
+const smtpMsgType = ref('success')
+
+async function loadSmtp () {
+  try {
+    const res = await fetch('/api/settings/smtp', {
+      headers: { Authorization: `Bearer ${authStore.token}` },
+    })
+    if (!res.ok) return
+    const data = await res.json()
+    Object.assign(smtpForm, {
+      smtp_host:      data.smtp_host || '',
+      smtp_port:      data.smtp_port || 587,
+      smtp_user:      data.smtp_user || '',
+      smtp_password:  data.smtp_password || '',
+      smtp_from_name: data.smtp_from_name || 'BruV AI',
+      smtp_tls:       data.smtp_tls !== false,
+    })
+  } catch { /* ignore */ }
+}
+
+async function saveSmtp () {
+  smtpSaving.value = true
+  smtpMsg.value = ''
+  try {
+    const res = await fetch('/api/settings/smtp', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authStore.token}` },
+      body: JSON.stringify(smtpForm),
+    })
+    if (res.ok) {
+      smtpMsg.value = '設定已儲存'
+      smtpMsgType.value = 'success'
+    } else {
+      const d = await res.json().catch(() => ({}))
+      smtpMsg.value = d.detail || '儲存失敗'
+      smtpMsgType.value = 'error'
+    }
+  } catch {
+    smtpMsg.value = '網路錯誤'
+    smtpMsgType.value = 'error'
+  } finally {
+    smtpSaving.value = false
+  }
+}
+
+async function testSmtp () {
+  smtpTesting.value = true
+  smtpMsg.value = ''
+  try {
+    const res = await fetch('/api/settings/smtp/test', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${authStore.token}` },
+    })
+    const d = await res.json().catch(() => ({}))
+    if (res.ok) {
+      smtpMsg.value = d.message || '測試郵件已寄出'
+      smtpMsgType.value = 'success'
+    } else {
+      smtpMsg.value = d.detail || '發送失敗'
+      smtpMsgType.value = 'error'
+    }
+  } catch {
+    smtpMsg.value = '網路錯誤'
+    smtpMsgType.value = 'error'
+  } finally {
+    smtpTesting.value = false
+  }
+}
+
 // ── 群組切換 ──────────────────────────────────────────────────────────────────
-const GROUP_DEFS = [
+const GROUP_DEFS = computed(() => [
   { key: 'user',   label: '使用者設定' },
   { key: 'model',  label: '模型設定' },
   { key: 'chat',   label: '對話設定' },
   { key: 'usage',  label: '使用量' },
   { key: 'data',   label: '資料管理' },
   { key: 'system', label: '系統' },
-]
+  ...(authStore.userRole === 'admin' ? [{ key: 'email', label: '郵件通知' }] : []),
+])
 const activeGroup = ref('user')
 function onGroupChange(group) {
   activeGroup.value = group
@@ -651,10 +778,11 @@ function onGroupChange(group) {
   if (group === 'usage')  { loadUsage() }
   if (group === 'data')   { loadSchema(); loadBackupList() }
   if (group === 'system') { loadSkills(); loadClosePref() }
+  if (group === 'email')  { loadSmtp() }
 }
 function _applyRouteGroup() {
   const g = route.query.group
-  if (g && GROUP_DEFS.some(d => d.key === g)) onGroupChange(g)
+  if (g && GROUP_DEFS.value.some(d => d.key === g)) onGroupChange(g)
 }
 
 // ── Model List ────────────────────────────────────────────────────────────────
