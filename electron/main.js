@@ -28,6 +28,7 @@ const resourcePath = app.isPackaged
   ? process.resourcesPath
   : path.join(__dirname, '..')
 const composePath = path.join(resourcePath, 'docker-compose.yml')
+const COMPOSE_PROJECT = 'bruv-ai'
 // .env 放在 userData（%APPDATA%\BruV AI\.env），確保 installer 升級時不會被覆蓋
 // 開發模式下沿用專案根目錄的 .env，方便調試
 const envPath = app.isPackaged
@@ -138,7 +139,7 @@ function ensureEnvFile () {
 // 用 compose down -v 只清本專案的 volume，不會誤傷其他 compose 專案。
 function purgeStatefulVolumes () {
   return new Promise((resolve) => {
-    const cmd = `docker compose -f "${composePath}" --env-file "${envPath}" down -v --remove-orphans`
+    const cmd = `docker compose -p ${COMPOSE_PROJECT} -f "${composePath}" --env-file "${envPath}" down -v --remove-orphans`
     exec(cmd, { timeout: 120000 }, () => resolve())
   })
 }
@@ -343,8 +344,8 @@ async function startDockerServices () {
   ensureDataDirs()
   const gpuOverridePath = await ensureGpuOverride()
   const overrideFlag = gpuOverridePath ? ` -f "${gpuOverridePath}"` : ''
-  const upCmd = `docker compose -f "${composePath}"${overrideFlag} --env-file "${envPath}" up -d --remove-orphans`
-  const downCmd = `docker compose -f "${composePath}"${overrideFlag} --env-file "${envPath}" down --remove-orphans`
+  const upCmd = `docker compose -p ${COMPOSE_PROJECT} -f "${composePath}"${overrideFlag} --env-file "${envPath}" up -d --remove-orphans`
+  const downCmd = `docker compose -p ${COMPOSE_PROJECT} -f "${composePath}"${overrideFlag} --env-file "${envPath}" down --remove-orphans`
   const runUp = () => new Promise((resolve, reject) => {
     exec(upCmd, { timeout: 1800000, maxBuffer: 64 * 1024 * 1024 },
       (err, _stdout, stderr) => {
@@ -498,7 +499,7 @@ async function stopDockerAndQuit () {
   try {
     await Promise.race([
       new Promise((resolve) => {
-        exec(`docker compose -f "${composePath}" --env-file "${envPath}" stop`,
+        exec(`docker compose -p ${COMPOSE_PROJECT} -f "${composePath}" --env-file "${envPath}" stop`,
           { timeout: 15000 }, () => resolve())
       }),
       new Promise((resolve) => setTimeout(resolve, 15000))
@@ -779,7 +780,7 @@ async function waitForBackend (retries = 0) {
       let logs = ''
       try {
         logs = await runCommand(
-          `docker compose -f "${composePath}" --env-file "${envPath}" logs --tail=20 --no-color`,
+          `docker compose -p ${COMPOSE_PROJECT} -f "${composePath}" --env-file "${envPath}" logs --tail=20 --no-color`,
           15000
         )
       } catch (e) {
@@ -1016,8 +1017,8 @@ function setupSetupIPC (setupCompleteFile) {
     const gpuOverridePath = await ensureGpuOverride()
     const overrideFlag = gpuOverridePath ? ` -f "${gpuOverridePath}"` : ''
 
-    const upCmd = `docker compose -f "${composePath}"${overrideFlag} --env-file "${envPath}" up -d --pull always --remove-orphans`
-    const downCmd = `docker compose -f "${composePath}"${overrideFlag} --env-file "${envPath}" down --remove-orphans`
+    const upCmd = `docker compose -p ${COMPOSE_PROJECT} -f "${composePath}"${overrideFlag} --env-file "${envPath}" up -d --pull always --remove-orphans`
+    const downCmd = `docker compose -p ${COMPOSE_PROJECT} -f "${composePath}"${overrideFlag} --env-file "${envPath}" down --remove-orphans`
     const rmConflictCmd = `docker ps -aq --filter name=^bruv_ai_`
 
     // 首次/重試都先強制清除殘留同名容器（任何 ai_kb_* 都刪除）
@@ -1038,7 +1039,7 @@ function setupSetupIPC (setupCompleteFile) {
     // }
 
     // 用 spawn 串流 stdout/stderr，即時傳給前端顯示
-    const upArgs = ['compose', '-f', composePath]
+    const upArgs = ['compose', '-p', COMPOSE_PROJECT, '-f', composePath]
     if (gpuOverridePath) upArgs.push('-f', gpuOverridePath)
     upArgs.push('--env-file', envPath, 'up', '-d', '--pull', 'always', '--remove-orphans')
 
@@ -1108,7 +1109,7 @@ function setupSetupIPC (setupCompleteFile) {
     let logs = ''
     try {
       logs = await runCommand(
-        `docker compose -f "${composePath}" --env-file "${envPath}" logs --tail=30 --no-color`,
+        `docker compose -p ${COMPOSE_PROJECT} -f "${composePath}" --env-file "${envPath}" logs --tail=30 --no-color`,
         15000
       )
     } catch (e) {
@@ -1288,7 +1289,7 @@ function setupAutoUpdater () {
       try {
         await Promise.race([
           new Promise((resolve) => {
-            exec(`docker compose -f "${composePath}" --env-file "${envPath}" stop`,
+            exec(`docker compose -p ${COMPOSE_PROJECT} -f "${composePath}" --env-file "${envPath}" stop`,
               { timeout: 10000 }, () => resolve())
           }),
           new Promise((resolve) => setTimeout(resolve, 10000))
