@@ -144,8 +144,35 @@ function purgeStatefulVolumes () {
   })
 }
 
+// ── 偵測關鍵 Port 是否已被非 Docker 程序佔用 ────────────────────────────────
+const REQUIRED_PORTS = [
+  { port: 80,    name: 'Nginx (前端 proxy)' },
+  { port: 8000,  name: 'Backend API' },
+  { port: 5432,  name: 'PostgreSQL' },
+  { port: 6333,  name: 'Qdrant' },
+  { port: 6379,  name: 'Redis' },
+  { port: 7474,  name: 'Neo4j HTTP' },
+  { port: 7687,  name: 'Neo4j Bolt' },
+  { port: 11434, name: 'Ollama' },
+]
+function checkPortFree (port) {
+  return new Promise((resolve) => {
+    const srv = require('net').createServer()
+    srv.once('error', () => resolve(false))
+    srv.once('listening', () => { srv.close(); resolve(true) })
+    srv.listen(port, '127.0.0.1')
+  })
+}
+async function checkRequiredPorts () {
+  const busy = []
+  for (const { port, name } of REQUIRED_PORTS) {
+    const free = await checkPortFree(port)
+    if (!free) busy.push(`  • Port ${port}  (${name})`)
+  }
+  return busy
+}
+
 // ── 確認 docker-compose 所需的資料目錄與檔案 bind-mount 來源存在 ──────────
-// 若 ./data/saga.db 不存在，Docker 會自動建立為「資料夾」，導致 SQLite 失敗。
 // 必須在 docker compose up 之前預建為「空檔案」。
 function ensureDataDirs () {
   try {
@@ -190,13 +217,16 @@ async function ensureGpuOverride () {
     return null
   }
   // 沒有 GPU：寫入 override 取消 ollama 的 nvidia 限制
-  // 用 NVIDIA_VISIBLE_DEVICES=none 才是 nvidia-container-cli 官方停用方式
-  // devices: [] 在部分 Docker Compose 版本 merge 時不會清除父層設定
+  // runtime: runc  → 直接繞過 nvidia hook，不論 toolkit 版本（含 legacy mode）
+  // NVIDIA_VISIBLE_DEVICES=none → nvidia-container-cli 官方停用方式
+  // OLLAMA_NUM_GPU=0 → 確保 ollama 不嘗試掛載 GPU layer
   const overrideYaml = [
     'services:',
     '  ollama:',
+    '    runtime: runc',
     '    environment:',
     '      - NVIDIA_VISIBLE_DEVICES=none',
+    '      - OLLAMA_NUM_GPU=0',
     '    deploy:',
     '      resources:',
     '        reservations:',
@@ -347,6 +377,24 @@ async function startDockerServices () {
     if (splashWindow && !splashWindow.isDestroyed()) splashWindow.show()
   }
   ensureDataDirs()
+
+  // Port 衝突預檢：若有非 Docker 程序佔用關鍵 port，提早告知使用者
+  const busyPorts = await checkRequiredPorts()
+  if (busyPorts.length > 0) {
+    if (splashWindow && !splashWindow.isDestroyed()) splashWindow.hide()
+    const { response: portResp } = await dialog.showMessageBox({
+      type: 'warning',
+      title: 'BruV AI — Port 衝突偵測',
+      message: '以下 Port 已被其他程序佔用',
+      detail: busyPorts.join('\n') + '\n\n請關閉衝突程序後再啟動 BruV AI，否則部分服務可能無法正常運作。\n\n是否仍要繼續？',
+      buttons: ['繼續', '取消'],
+      defaultId: 1,
+      cancelId: 1
+    })
+    if (portResp === 1) { app.quit(); return false }
+    if (splashWindow && !splashWindow.isDestroyed()) splashWindow.show()
+  }
+
   const gpuOverridePath = await ensureGpuOverride()
   const overrideFlag = gpuOverridePath ? ` -f "${gpuOverridePath}"` : ''
   const upCmd = `docker compose -p ${COMPOSE_PROJECT} -f "${composePath}"${overrideFlag} --env-file "${envPath}" up -d --remove-orphans`
@@ -1045,7 +1093,7 @@ function setupSetupIPC (setupCompleteFile) {
     const gpuOverridePath = await ensureGpuOverride()
     const overrideFlag = gpuOverridePath ? ` -f "${gpuOverridePath}"` : ''
 
-    const upCmd = `docker compose -p ${COMPOSE_PROJECT} -f "${composePath}"${overrideFlag} --env-file "${envPath}" up -d --pull always --remove-orphans`
+    const upCmd = `docker compose -p ${COMPOSE_PROJECT} -f "${composePath}"${overrideFlag} --env-file "${envPath}" up -d --pull missing --remove-orphans`
     const downCmd = `docker compose -p ${COMPOSE_PROJECT} -f "${composePath}"${overrideFlag} --env-file "${envPath}" down --remove-orphans`
     const rmConflictCmd = `docker ps -aq --filter name=^bruv_ai_`
 
@@ -1069,7 +1117,7 @@ function setupSetupIPC (setupCompleteFile) {
     // 用 spawn 串流 stdout/stderr，即時傳給前端顯示
     const upArgs = ['compose', '-p', COMPOSE_PROJECT, '-f', composePath]
     if (gpuOverridePath) upArgs.push('-f', gpuOverridePath)
-    upArgs.push('--env-file', envPath, 'up', '-d', '--pull', 'always', '--remove-orphans')
+    upArgs.push('--env-file', envPath, 'up', '-d', '--pull', 'missing', '--remove-orphans')
 
     const runUp = () => new Promise((resolve, reject) => {
       const child = spawn('docker', upArgs, { stdio: ['ignore', 'pipe', 'pipe'] })
