@@ -18,4 +18,7 @@
       Sleep 1000
     skip_purge:
   skip_docker_stop:
+
+  ; 清除 userData（setup-complete.json、.env、token.enc 等），確保重裝後進入 setup wizard
+  RMDir /r "$APPDATA\BruV AI"
 !macroend
