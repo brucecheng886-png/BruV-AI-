@@ -6,7 +6,7 @@
 
 ## 安裝程式（推薦）
 
-1. 下載 [BruV AI Setup.exe](https://github.com/brucecheng886-png/BruV-AI-/releases)
+1. 下載 [BruV AI Setup.exe](https://github.com/brucecheng886-png/BruV-AI-/releases/latest)
 2. 執行安裝程式，選擇安裝路徑
 3. 開啟 BruV AI，依照設定精靈完成初始設定
 4. 設定精靈會自動引導安裝 Docker Desktop、Ollama 和下載必要模型
@@ -18,6 +18,15 @@
 - 網路：首次啟動需下載約 15GB 資料
 
 注意：設定精靈完成後，每次開啟 APP 會自動啟動後台服務（Docker 容器），關閉時可選擇同時停止服務。
+
+### 解除安裝
+
+透過 Windows「新增或移除程式」解除安裝時，會依序詢問：
+
+1. **是否刪除 Docker 容器？**（選「是」停止並移除容器，資料保留；選「否」容器維持原狀）
+2. **是否刪除所有資料？**（選「是」永久刪除資料庫、模型、上傳檔案，**不可復原**）
+
+解除安裝會自動清除應用程式設定，重新安裝後會正常進入初始設定精靈。
 
 ---
 
