@@ -2,6 +2,7 @@
 Auth Router — 登入/登出/取得目前使用者/帳號管理
 """
 import hashlib
+import logging
 import secrets
 import smtplib
 import ssl as _ssl
@@ -18,6 +19,7 @@ from database import get_db
 from models import User, PasswordResetToken, SystemSetting
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 
@@ -122,24 +124,42 @@ class InitAdminRequest(BaseModel):
 
 @router.post("/init-admin")
 async def init_admin(body: InitAdminRequest, db: AsyncSession = Depends(get_db)):
-    # 找預設 admin 列（email='admin@local'，密碼為 placeholder）
-    result = await db.execute(select(User).where(User.email == "admin@local"))
-    admin = result.scalar_one_or_none()
+    logger.info("[init-admin] 開始執行，email=%s", body.email)
+    try:
+        # 找預設 admin 列（email='admin@local'，密碼為 placeholder）
+        result = await db.execute(select(User).where(User.email == "admin@local"))
+        admin = result.scalar_one_or_none()
+        logger.info("[init-admin] admin@local 查詢結果: %s", admin)
+    except Exception as e:
+        logger.error("[init-admin] DB 查詢失敗: %s", e, exc_info=True)
+        raise
 
     if admin is None or "placeholder" not in (admin.password or ""):
+        logger.info("[init-admin] 管理員已初始化或不存在，回傳 403")
         raise HTTPException(status_code=403, detail="管理員已初始化")
 
     if body.email != "admin@local":
-        dup = await db.execute(
-            select(User).where(User.email == body.email, User.id != admin.id)
-        )
-        if dup.scalar_one_or_none() is not None:
-            raise HTTPException(status_code=409, detail="此 Email 已被使用")
+        try:
+            dup = await db.execute(
+                select(User).where(User.email == body.email, User.id != admin.id)
+            )
+            if dup.scalar_one_or_none() is not None:
+                raise HTTPException(status_code=409, detail="此 Email 已被使用")
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error("[init-admin] 重複 email 查詢失敗: %s", e, exc_info=True)
+            raise
 
-    admin.email = body.email
-    admin.password = hash_password(body.password)
-    admin.role = "admin"
-    await db.commit()
+    try:
+        admin.email = body.email
+        admin.password = hash_password(body.password)
+        admin.role = "admin"
+        await db.commit()
+        logger.info("[init-admin] 成功設定管理員 email=%s", body.email)
+    except Exception as e:
+        logger.error("[init-admin] commit 失敗: %s", e, exc_info=True)
+        raise
     return {"success": True, "user_id": admin.id, "email": admin.email}
 
 

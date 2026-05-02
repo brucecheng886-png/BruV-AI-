@@ -1235,6 +1235,14 @@ function setupSetupIPC (setupCompleteFile) {
       if (lastResult.success || lastResult.status === 403) return lastResult
       console.warn(`[setup:initAdmin] 第 ${attempt + 1} 次嘗試失敗：`, lastResult.error)
     }
+    // 最終失敗時，自動抓取 backend container log 供診斷
+    try {
+      const logs = await runCommand(
+        `docker compose -p ${COMPOSE_PROJECT} -f "${composePath}" --env-file "${envPath}" logs backend --tail=40 --no-color`,
+        10000
+      )
+      lastResult.logs = logs.slice(0, 2000)
+    } catch { /* 抓 log 失敗不影響主流程 */ }
     return lastResult
   })
 

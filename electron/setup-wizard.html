@@ -1391,7 +1391,8 @@
       if (!initResult.success) {
         // 403 = 已初始化（重裝情境，該帳號已存在）→ 視為 OK、繼續
         if (initResult.status !== 403) {
-          showCompletionError('管理員帳號設定失敗：' + (initResult.error || '未知錯誤'))
+          const logDetail = initResult.logs ? '\n\n【Backend Log】\n' + initResult.logs : ''
+          showCompletionError('管理員帳號設定失敗：' + (initResult.error || '未知錯誤') + logDetail)
           return
         }
       }
@@ -1434,7 +1435,8 @@
         adminCreds.email, adminCreds.password
       )
       if (!initResult.success && initResult.status !== 403) {
-        showCompletionError('管理員帳號設定失敗：' + (initResult.error || '未知錯誤'))
+        const logDetail = initResult.logs ? '\n\n【Backend Log】\n' + initResult.logs : ''
+        showCompletionError('管理員帳號設定失敗：' + (initResult.error || '未知錯誤') + logDetail)
         return
       }
     }
