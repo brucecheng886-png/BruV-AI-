@@ -8,43 +8,43 @@
   nsExec::ExecToStack 'powershell -NoProfile -WindowStyle Hidden -Command "\
     Add-Type -AssemblyName System.Windows.Forms; \
     Add-Type -AssemblyName System.Drawing; \
-    $f = New-Object System.Windows.Forms.Form; \
-    $f.Text = \"BruV AI 解除安裝\"; \
-    $f.Size = New-Object System.Drawing.Size(460, 240); \
-    $f.StartPosition = \"CenterScreen\"; \
-    $f.FormBorderStyle = \"FixedDialog\"; \
-    $f.MaximizeBox = $false; \
-    $f.MinimizeBox = $false; \
-    $lbl = New-Object System.Windows.Forms.Label; \
-    $lbl.Text = \"請選擇解除安裝後的清理選項：\"; \
-    $lbl.Location = New-Object System.Drawing.Point(20, 20); \
-    $lbl.Size = New-Object System.Drawing.Size(400, 20); \
-    $cb1 = New-Object System.Windows.Forms.CheckBox; \
-    $cb1.Text = \"停止並刪除 Docker 容器（保留資料庫與上傳檔案）\"; \
-    $cb1.Location = New-Object System.Drawing.Point(20, 55); \
-    $cb1.Size = New-Object System.Drawing.Size(400, 24); \
-    $cb2 = New-Object System.Windows.Forms.CheckBox; \
-    $cb2.Text = \"同時刪除所有資料（資料庫、模型、上傳檔案）⚠ 不可復原\"; \
-    $cb2.Location = New-Object System.Drawing.Point(20, 85); \
-    $cb2.Size = New-Object System.Drawing.Size(400, 24); \
-    $cb2.add_CheckedChanged({ if ($cb2.Checked) { $cb1.Checked = $true } }); \
-    $btnOK = New-Object System.Windows.Forms.Button; \
-    $btnOK.Text = \"確認解除安裝\"; \
-    $btnOK.Location = New-Object System.Drawing.Point(240, 155); \
-    $btnOK.Size = New-Object System.Drawing.Size(100, 30); \
-    $btnOK.DialogResult = \"OK\"; \
-    $btnCancel = New-Object System.Windows.Forms.Button; \
-    $btnCancel.Text = \"取消\"; \
-    $btnCancel.Location = New-Object System.Drawing.Point(350, 155); \
-    $btnCancel.Size = New-Object System.Drawing.Size(80, 30); \
-    $btnCancel.DialogResult = \"Cancel\"; \
-    $f.Controls.AddRange(@($lbl, $cb1, $cb2, $btnOK, $btnCancel)); \
-    $f.AcceptButton = $btnOK; \
-    $f.CancelButton = $btnCancel; \
-    $r = $f.ShowDialog(); \
-    if ($r -eq \"Cancel\") { exit 99 }; \
-    if ($cb2.Checked) { exit 3 }; \
-    if ($cb1.Checked) { exit 1 }; \
+    $$f = New-Object System.Windows.Forms.Form; \
+    $$f.Text = \"BruV AI 解除安裝\"; \
+    $$f.Size = New-Object System.Drawing.Size(460, 240); \
+    $$f.StartPosition = \"CenterScreen\"; \
+    $$f.FormBorderStyle = \"FixedDialog\"; \
+    $$f.MaximizeBox = $$false; \
+    $$f.MinimizeBox = $$false; \
+    $$lbl = New-Object System.Windows.Forms.Label; \
+    $$lbl.Text = \"請選擇解除安裝後的清理選項：\"; \
+    $$lbl.Location = New-Object System.Drawing.Point(20, 20); \
+    $$lbl.Size = New-Object System.Drawing.Size(400, 20); \
+    $$cb1 = New-Object System.Windows.Forms.CheckBox; \
+    $$cb1.Text = \"停止並刪除 Docker 容器（保留資料庫與上傳檔案）\"; \
+    $$cb1.Location = New-Object System.Drawing.Point(20, 55); \
+    $$cb1.Size = New-Object System.Drawing.Size(400, 24); \
+    $$cb2 = New-Object System.Windows.Forms.CheckBox; \
+    $$cb2.Text = \"同時刪除所有資料（資料庫、模型、上傳檔案）⚠ 不可復原\"; \
+    $$cb2.Location = New-Object System.Drawing.Point(20, 85); \
+    $$cb2.Size = New-Object System.Drawing.Size(400, 24); \
+    $$cb2.add_CheckedChanged({ if ($$cb2.Checked) { $$cb1.Checked = $$true } }); \
+    $$btnOK = New-Object System.Windows.Forms.Button; \
+    $$btnOK.Text = \"確認解除安裝\"; \
+    $$btnOK.Location = New-Object System.Drawing.Point(240, 155); \
+    $$btnOK.Size = New-Object System.Drawing.Size(100, 30); \
+    $$btnOK.DialogResult = \"OK\"; \
+    $$btnCancel = New-Object System.Windows.Forms.Button; \
+    $$btnCancel.Text = \"取消\"; \
+    $$btnCancel.Location = New-Object System.Drawing.Point(350, 155); \
+    $$btnCancel.Size = New-Object System.Drawing.Size(80, 30); \
+    $$btnCancel.DialogResult = \"Cancel\"; \
+    $$f.Controls.AddRange(@($$lbl, $$cb1, $$cb2, $$btnOK, $$btnCancel)); \
+    $$f.AcceptButton = $$btnOK; \
+    $$f.CancelButton = $$btnCancel; \
+    $$r = $$f.ShowDialog(); \
+    if ($$r -eq \"Cancel\") { exit 99 }; \
+    if ($$cb2.Checked) { exit 3 }; \
+    if ($$cb1.Checked) { exit 1 }; \
     exit 0"'
   Pop $0  ; stdout（忽略）
   Pop $1  ; exit code
