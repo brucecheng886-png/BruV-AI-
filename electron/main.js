@@ -1196,8 +1196,26 @@ function setupSetupIPC (setupCompleteFile) {
     return { success: false, error: '後端服務無法在 300 秒內啟動', logs: logs.slice(0, 2000) }
   })
 
-  // ── 初始化管理員帳號（呼叫後端 API，最多重試 3 次）──
+  // ── 初始化管理員帳號（呼叫後端 API，最多重試 4 次，每次間隔 5 秒）──
   ipcMain.handle('setup:initAdmin', async (_, { email, password }) => {
+    // 先確認後端的 DB 連線真正就緒（/api/health 不碰 DB，需要呼叫會真正查詢的 endpoint）
+    // 用 /api/auth/me（無 token → 401，但 401 代表 DB 可連），最多等 60 秒
+    const waitForDb = async () => {
+      for (let i = 0; i < 12; i++) {
+        await new Promise(r => setTimeout(r, 5000))
+        try {
+          const ok = await new Promise((resolve) => {
+            http.get('http://localhost:80/api/health/services', (res) => {
+              res.resume()
+              resolve(res.statusCode === 200)
+            }).on('error', () => resolve(false))
+          })
+          if (ok) return
+        } catch {}
+      }
+    }
+    await waitForDb()
+
     const tryOnce = () => new Promise((resolve) => {
       const data = JSON.stringify({ email, password })
       const req = http.request({
@@ -1231,7 +1249,7 @@ function setupSetupIPC (setupCompleteFile) {
     })
     let lastResult = { success: false, error: 'init-admin 未執行' }
     for (let attempt = 0; attempt < 4; attempt++) {
-      if (attempt > 0) await new Promise(r => setTimeout(r, 3000))
+      if (attempt > 0) await new Promise(r => setTimeout(r, 5000))
       lastResult = await tryOnce()
       if (lastResult.success || lastResult.status === 403) return lastResult
       console.warn(`[setup:initAdmin] 第 ${attempt + 1} 次嘗試失敗：`, lastResult.error)
@@ -1239,7 +1257,7 @@ function setupSetupIPC (setupCompleteFile) {
     // 最終失敗時，自動抓取 backend container log 供診斷
     try {
       const logs = await runCommand(
-        `docker compose -p ${COMPOSE_PROJECT} -f "${composePath}" --env-file "${envPath}" logs backend --tail=40 --no-color`,
+        `docker compose -p ${COMPOSE_PROJECT} -f "${composePath}" --env-file "${envPath}" logs backend --tail=80 --no-color`,
         10000
       )
       lastResult.logs = logs.slice(0, 2000)

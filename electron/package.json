@@ -1,6 +1,6 @@
 {
   "name": "bruv-ai-kb",
-  "version": "1.0.35",
+  "version": "1.0.36",
   "description": "BruV AI 知識庫 — 桌面版",
   "main": "main.js",
   "scripts": {
@@ -34,8 +34,8 @@
         "to": "init_db.sql"
       },
       {
-        "from": "../.env",
-        "to": ".env"
+        "from": "../.env.example",
+        "to": ".env.example"
       }
     ],
     "win": {
