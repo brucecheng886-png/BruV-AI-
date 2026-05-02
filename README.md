@@ -6,7 +6,7 @@
 
 ## 安裝程式（推薦）
 
-1. 下載 [BruV AI Setup 1.0.0.exe](https://github.com/brucecheng886-png/BruV-AI-/releases)
+1. 下載 [BruV AI Setup.exe](https://github.com/brucecheng886-png/BruV-AI-/releases)
 2. 執行安裝程式，選擇安裝路徑
 3. 開啟 BruV AI，依照設定精靈完成初始設定
 4. 設定精靈會自動引導安裝 Docker Desktop、Ollama 和下載必要模型
