@@ -1086,7 +1086,7 @@ function setupSetupIPC (setupCompleteFile) {
 
   // ── Step 6: 啟動容器服務 ──
   ipcMain.handle('setup:startServices', async (event) => {
-    const { freshlyCreated, missingTemplate } = ensureEnvFile()
+    const { missingTemplate } = ensureEnvFile()
     if (missingTemplate) {
       return { success: false, error: '找不到 .env.example，安裝可能不完整。請重新安裝 BruV AI。' }
     }
@@ -1098,7 +1098,7 @@ function setupSetupIPC (setupCompleteFile) {
     const downCmd = `docker compose -p ${COMPOSE_PROJECT} -f "${composePath}"${overrideFlag} --env-file "${envPath}" down --remove-orphans`
     const rmConflictCmd = `docker ps -aq --filter name=^bruv_ai_`
 
-    // 首次/重試都先強制清除殘留同名容器（任何 ai_kb_* 都刪除）
+    // 首次/重試都先強制清除殘留同名容器（任何 bruv_ai_* 都刪除）
     await new Promise((resolve) => {
       exec(downCmd, { timeout: 120000 }, () => resolve())
     })
@@ -1109,13 +1109,12 @@ function setupSetupIPC (setupCompleteFile) {
         { timeout: 60000 }, () => resolve()
       )
     })
-    // .env 是這次安裝才生成 → 舊 volume 內的密碼會與新 .env 不符，必須清掉
-    // ⚠️ freshlyCreated=true 代表：從未安裝（首次）或解除安裝後重裝（userData/.env 被刪）
-    //    兩種情況都需要清掉舊 volume，否則 postgres 以舊密碼拒絕新 .env 的連線
-    if (freshlyCreated) {
-      event.sender.send('setup:dockerLog', '偵測到新 .env，正在清除舊資料庫 volume...')
-      await purgeStatefulVolumes()
-    }
+    // ⚠️ Setup wizard 執行時，舊 volume 的密碼可能與當前 .env 不符（解除安裝/重裝導致），
+    //    必須無條件清除舊 volume，確保 postgres 以當前 .env 密碼全新初始化。
+    //    freshlyCreated 機制已不可靠（saveEnvSettings 也會呼叫 ensureEnvFile，
+    //    導致 startServices 到達時 freshlyCreated 永遠是 false）。
+    event.sender.send('setup:dockerLog', '正在清除舊資料庫 volume（確保密碼一致）...')
+    await purgeStatefulVolumes()
 
     // 用 spawn 串流 stdout/stderr，即時傳給前端顯示
     const upArgs = ['compose', '-p', COMPOSE_PROJECT, '-f', composePath]
