@@ -1,6 +1,6 @@
 {
   "name": "bruv-ai-kb",
-  "version": "1.0.20",
+  "version": "1.0.21",
   "description": "BruV AI 知識庫 — 桌面版",
   "main": "main.js",
   "scripts": {

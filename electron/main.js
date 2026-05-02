@@ -190,9 +190,13 @@ async function ensureGpuOverride () {
     return null
   }
   // 沒有 GPU：寫入 override 取消 ollama 的 nvidia 限制
+  // 用 NVIDIA_VISIBLE_DEVICES=none 才是 nvidia-container-cli 官方停用方式
+  // devices: [] 在部分 Docker Compose 版本 merge 時不會清除父層設定
   const overrideYaml = [
     'services:',
     '  ollama:',
+    '    environment:',
+    '      - NVIDIA_VISIBLE_DEVICES=none',
     '    deploy:',
     '      resources:',
     '        reservations:',
