@@ -403,8 +403,13 @@ async def _rag_stream(
     )
 
     # 讀取動態 RAG 設定 & 對話行為設定
-    rag_cfg  = await get_rag_runtime_config(db)
-    chat_cfg = await get_chat_runtime_config(db)
+    try:
+        rag_cfg  = await get_rag_runtime_config(db)
+        chat_cfg = await get_chat_runtime_config(db)
+    except Exception as _cfg_err:
+        logger.warning("get_runtime_config failed: %s — using defaults", _cfg_err)
+        rag_cfg  = {}
+        chat_cfg = {}
     _top_k             = rag_cfg.get("top_k",             QDRANT_SEARCH_TOP_K)
     _rerank_top_k      = rag_cfg.get("rerank_top_k",      RERANK_TOP_K)
     _max_context_chars = rag_cfg.get("max_context_chars", MAX_CONTEXT_CHARS)
@@ -475,14 +480,20 @@ async def _rag_stream(
 
     # 3. Qdrant 向量搜索
     qdrant = get_qdrant_client()
-    search_result_obj = await qdrant.query_points(
-        collection_name=settings.QDRANT_COLLECTION,
-        query=query_vec,
-        limit=_top_k,
-        with_payload=True,
-        query_filter=qdrant_filter,
-    )
-    search_result = search_result_obj.points
+    try:
+        search_result_obj = await qdrant.query_points(
+            collection_name=settings.QDRANT_COLLECTION,
+            query=query_vec,
+            limit=_top_k,
+            with_payload=True,
+            query_filter=qdrant_filter,
+        )
+        search_result = search_result_obj.points
+    except Exception as _qe:
+        logger.error("Qdrant search failed: %s", _qe)
+        yield "data: " + json.dumps({"type": "error", "text": f"向量資料庫連線失敗：{_qe}"}) + "\n\n"
+        yield "data: [DONE]\n\n"
+        return
 
     if not search_result:
         if file_context:
@@ -614,28 +625,34 @@ async def _rag_stream(
             logger.warning("prompt_template auto-match failed: %s", _me)
 
     # 5. 取先前對話紀錄（摘要 + 近期完整輪次）
-    # 5a. 取總訊息數
-    total_count_res = await db.execute(
-        select(func.count(Message.id)).where(Message.conv_id == conv_id)
-    )
-    total_msg_count = total_count_res.scalar() or 0
+    try:
+        # 5a. 取總訊息數
+        total_count_res = await db.execute(
+            select(func.count(Message.id)).where(Message.conv_id == conv_id)
+        )
+        total_msg_count = total_count_res.scalar() or 0
 
-    # 5b. 取對話現有摘要
-    conv_row = await db.execute(
-        select(Conversation.summary, Conversation.summarized_up_to)
-        .where(Conversation.id == conv_id)
-    )
-    conv_info = conv_row.first()
-    existing_summary = conv_info.summary if conv_info else None
+        # 5b. 取對話現有摘要
+        conv_row = await db.execute(
+            select(Conversation.summary, Conversation.summarized_up_to)
+            .where(Conversation.id == conv_id)
+        )
+        conv_info = conv_row.first()
+        existing_summary = conv_info.summary if conv_info else None
 
-    # 5c. 取最近 RECENT_ROUNDS * 2 筆完整對話
-    recent_result = await db.execute(
-        select(Message)
-        .where(Message.conv_id == conv_id)
-        .order_by(Message.created_at.desc())
-        .limit(RECENT_ROUNDS * 2)
-    )
-    recent_msgs = list(reversed(recent_result.scalars().all()))
+        # 5c. 取最近 RECENT_ROUNDS * 2 筆完整對話
+        recent_result = await db.execute(
+            select(Message)
+            .where(Message.conv_id == conv_id)
+            .order_by(Message.created_at.desc())
+            .limit(RECENT_ROUNDS * 2)
+        )
+        recent_msgs = list(reversed(recent_result.scalars().all()))
+    except Exception as _hist_err:
+        logger.warning("history load failed: %s — starting fresh", _hist_err)
+        total_msg_count = 0
+        existing_summary = None
+        recent_msgs = []
 
     # 重生成：排除指定的舊 assistant 訊息，避免它出現在 history 中
     if regenerated_from:
@@ -685,7 +702,11 @@ async def _rag_stream(
     from routers.settings_router import get_llm_runtime_config
     from services.llm_resolver import resolve_model_runtime, apply_model_runtime
     from services.llm_metrics import track_llm_call
-    runtime_config = await get_llm_runtime_config(db)
+    try:
+        runtime_config = await get_llm_runtime_config(db)
+    except Exception as _rc_err:
+        logger.warning("get_llm_runtime_config failed: %s — using empty config", _rc_err)
+        runtime_config = {}
 
     # 依第一原則（first-principles-api-key §三）：以 model_name 解析 model-level 設定
     # provider 由 model 名稱自動推測；model-level 的 api_key / base_url / provider 覆寫 system_settings fallback
