@@ -86,11 +86,24 @@ $dcOutput = docker compose up -d --remove-orphans 2>&1
 $dcExit = $LASTEXITCODE
 
 if ($dcExit -ne 0) {
-    # compose 失敗可能是 name conflict（容器由另一個 project 啟動）
-    # 直接檢查關鍵容器是否已在運行，若是就繼續
-    $running = docker ps --filter "name=bruv_ai_backend" --filter "status=running" -q 2>$null
-    if ($running) {
-        Write-Warn "docker compose 回報非零（可能 project 名稱不符），但容器已在運行，繼續..."
+    # 判斷是否為 name conflict（容器已存在但屬於其他 project）
+    $isConflict = $dcOutput | Where-Object { $_ -like '*already in use*' }
+    if ($isConflict) {
+        Write-Warn "容器已存在（project 名稱不符），嘗試直接啟動..."
+        $allContainers = @(
+            'bruv_ai_postgres','bruv_ai_redis','bruv_ai_qdrant','bruv_ai_minio',
+            'bruv_ai_ollama','bruv_ai_neo4j','bruv_ai_backend','bruv_ai_celery','bruv_ai_playwright'
+        )
+        docker start @allContainers 2>&1 | Out-Null
+        Start-Sleep 2
+        $running = docker ps --filter "name=bruv_ai_backend" --filter "status=running" -q 2>$null
+        if ($running) {
+            Write-Ok "容器已啟動"
+        } else {
+            Write-Fail "container 啟動失敗，請手動檢查。"
+            Read-Host "按 Enter 結束"
+            exit 1
+        }
     } else {
         $dcOutput | ForEach-Object { Write-Info $_ }
         Write-Fail "docker compose 啟動失敗，請檢查 .env 設定與 Docker 狀態。"
@@ -185,11 +198,7 @@ try {
 
 Set-Location $ROOT
 
-# ── 結束 ──────────────────────────────────────────────────────────────────────
+# ── 結束（自動關閉）───────────────────────────────────────────────────────────
 Write-Host ""
-Write-Host "  ─────────────────────────────────────────────" -ForegroundColor DarkGray
-Write-Host "  Electron 已關閉。" -ForegroundColor DarkGray
-Write-Host "  容器仍在背景執行，若要停止請執行「停止.bat」。" -ForegroundColor DarkGray
-Write-Host "  ─────────────────────────────────────────────" -ForegroundColor DarkGray
+Write-Host "  Electron 已關閉。容器仍在背景運行。" -ForegroundColor DarkGray
 Write-Host ""
-Read-Host "按 Enter 關閉視窗"
