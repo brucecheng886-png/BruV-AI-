@@ -8,10 +8,13 @@
   nsExec::Exec 'taskkill /F /IM "BruV AI Helper (Plugin).exe" /T'
   Sleep 3000
 
-  ; 靜默模式 = electron-updater 自動更新呼叫，跳過解除安裝對話框與資料清理，直接覆蓋安裝
-  ${If} ${Silent}
+  ; 偵測 flag 檔案：electron-updater quitAndInstall 前會寫入此檔，表示這是自動更新觸發的解除安裝
+  IfFileExists "$APPDATA\bruv-ai-kb\auto-update.flag" bruv_ai_autoupdate
+  Goto bruv_ai_manual_uninstall
+  bruv_ai_autoupdate:
+    Delete "$APPDATA\bruv-ai-kb\auto-update.flag"
     Return
-  ${EndIf}
+  bruv_ai_manual_uninstall:
 
   ; 用 PowerShell WinForms 顯示有勾選欄位的對話框
   ; Exit Code: 0=什麼都不做  1=刪容器（保留資料）  3=刪容器+資料  99=取消解除安裝

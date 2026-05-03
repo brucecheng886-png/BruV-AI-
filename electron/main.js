@@ -462,6 +462,11 @@ function createMain () {
     show: false,
     title: 'BruV AI 知識庫',
     titleBarStyle: 'hidden',
+    titleBarOverlay: {
+      color: '#f0f0f0',
+      symbolColor: '#555555',
+      height: 38,
+    },
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false,
@@ -632,13 +637,16 @@ function setupIPC () {
   ipcMain.on('win-minimize',     () => mainWindow?.minimize())
   ipcMain.on('win-maximize',     () => mainWindow?.isMaximized() ? mainWindow.unmaximize() : mainWindow.maximize())
   ipcMain.on('win-quit',         () => app.quit())
-  ipcMain.on('relaunch-for-update', () => { autoUpdater.quitAndInstall() })
+  ipcMain.on('relaunch-for-update', () => {
+    try { fs.writeFileSync(path.join(app.getPath('appData'), 'bruv-ai-kb', 'auto-update.flag'), '1') } catch {}
+    autoUpdater.quitAndInstall(true, true)
+  })
   ipcMain.on('win-set-theme', (_, theme) => {
     if (!mainWindow || typeof mainWindow.setTitleBarOverlay !== 'function') return
     if (theme === 'dark') {
       mainWindow.setTitleBarOverlay({ color: '#0f0f1a', symbolColor: '#e5e7eb', height: 38 })
     } else {
-      mainWindow.setTitleBarOverlay({ color: '#ffffff', symbolColor: '#333333', height: 38 })
+      mainWindow.setTitleBarOverlay({ color: '#f0f0f0', symbolColor: '#555555', height: 38 })
     }
   })
 
@@ -1411,7 +1419,8 @@ function setupAutoUpdater () {
           new Promise((resolve) => setTimeout(resolve, 10000))
         ])
       } catch { /* ignore */ }
-      autoUpdater.quitAndInstall()
+      try { fs.writeFileSync(path.join(app.getPath('appData'), 'bruv-ai-kb', 'auto-update.flag'), '1') } catch {}
+      autoUpdater.quitAndInstall(true, true)
     }
   })
 
