@@ -639,6 +639,7 @@ function setupIPC () {
   ipcMain.on('win-quit',         () => app.quit())
   ipcMain.on('relaunch-for-update', () => {
     try { fs.writeFileSync(path.join(app.getPath('appData'), 'bruv-ai-kb', 'auto-update.flag'), '1') } catch {}
+    spawnUpdateBridge()  // 先啟動橋接視窗，Electron 退出後仍顯示「正在更新」
     autoUpdater.quitAndInstall(true, true)
   })
   ipcMain.on('win-set-theme', (_, theme) => {
@@ -1379,12 +1380,65 @@ app.on('window-all-closed', () => {
 })
 
 // ── 自動更新（electron-updater + GitHub Releases）─────────────────────────
+// ── 更新橋接視窗：在 Electron 程序退出後仍保持可見，直到新版本啟動 ────────────
+function spawnUpdateBridge () {
+  if (process.platform !== 'win32') return
+  // 使用 UTF-16LE base64 編碼傳遞腳本，避免引號/換行問題
+  const script = [
+    'Add-Type -AssemblyName System.Windows.Forms',
+    'Add-Type -AssemblyName System.Drawing',
+    '$f = New-Object System.Windows.Forms.Form',
+    '$f.Text = "BruV AI"',
+    '$f.Size = New-Object System.Drawing.Size(400, 130)',
+    '$f.StartPosition = "CenterScreen"',
+    '$f.FormBorderStyle = "FixedSingle"',
+    '$f.MaximizeBox = $false',
+    '$f.MinimizeBox = $false',
+    '$f.TopMost = $true',
+    '$f.BackColor = [System.Drawing.ColorTranslator]::FromHtml("#f0f0f0")',
+    '$lbl = New-Object System.Windows.Forms.Label',
+    '$lbl.Text = "BruV AI 正在安裝更新，請稍候..."',
+    '$lbl.Location = New-Object System.Drawing.Point(20, 25)',
+    '$lbl.Size = New-Object System.Drawing.Size(360, 32)',
+    '$lbl.Font = New-Object System.Drawing.Font("Microsoft JhengHei UI", 12)',
+    '$sub = New-Object System.Windows.Forms.Label',
+    '$sub.Text = "更新完成後應用程式將自動重新啟動"',
+    '$sub.Location = New-Object System.Drawing.Point(20, 60)',
+    '$sub.Size = New-Object System.Drawing.Size(360, 20)',
+    '$sub.Font = New-Object System.Drawing.Font("Microsoft JhengHei UI", 9)',
+    '$sub.ForeColor = [System.Drawing.Color]::FromArgb(120, 120, 120)',
+    '$f.Controls.Add($lbl)',
+    '$f.Controls.Add($sub)',
+    '$f.Show()',
+    '$t = Get-Date',
+    'while ($true) {',
+    '    [System.Windows.Forms.Application]::DoEvents()',
+    '    Start-Sleep -Milliseconds 300',
+    '    if (Get-Process -Name "BruV AI" -ErrorAction SilentlyContinue) { break }',
+    '    if ((New-TimeSpan -Start $t).TotalSeconds -gt 180) { break }',
+    '}',
+    '$f.Close()'
+  ].join('\n')
+
+  // 編碼為 UTF-16LE base64（PowerShell -EncodedCommand 要求）
+  const buf = Buffer.alloc(script.length * 2)
+  for (let i = 0; i < script.length; i++) buf.writeUInt16LE(script.charCodeAt(i), i * 2)
+  const encoded = buf.toString('base64')
+
+  const proc = spawn('powershell.exe',
+    ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded],
+    { detached: true, stdio: 'ignore', windowsHide: true }
+  )
+  proc.unref()
+}
+
 function setupAutoUpdater () {
   // Private repo 需要 GH_TOKEN 才能取得 release 資訊
   const ghToken = process.env.GH_TOKEN
   if (ghToken) {
     autoUpdater.addAuthHeader(`token ${ghToken}`)
   }
+  autoUpdater.autoInstallOnAppQuit = false  // 使用者必須明確觸發更新，避免關閉視窗時靜默安裝
   autoUpdater.on('update-available', (info) => {
     console.log('[autoUpdater] 偵測到新版本：', info.version)
     mainWindow?.webContents.send('update-available', { version: info.version })
@@ -1400,28 +1454,7 @@ function setupAutoUpdater () {
   })
   autoUpdater.on('update-downloaded', async (info) => {
     mainWindow?.webContents.send('update-downloaded', { version: info.version })
-    const { response } = await dialog.showMessageBox({
-      type: 'info',
-      title: 'BruV AI 更新',
-      message: `已下載新版本 v${info.version}`,
-      detail: '是否立即重新啟動以套用更新？\n（選「稍後」則於下次啟動時自動套用）',
-      buttons: ['立即重啟', '稍後'],
-      defaultId: 0
-    })
-    if (response === 0) {
-      // 等待 docker compose stop 完成後再安裝，避免容器資料在更新中損毀（最多等 10s）
-      try {
-        await Promise.race([
-          new Promise((resolve) => {
-            exec(`docker compose -p ${COMPOSE_PROJECT} -f "${composePath}" --env-file "${envPath}" stop`,
-              { timeout: 10000 }, () => resolve())
-          }),
-          new Promise((resolve) => setTimeout(resolve, 10000))
-        ])
-      } catch { /* ignore */ }
-      try { fs.writeFileSync(path.join(app.getPath('appData'), 'bruv-ai-kb', 'auto-update.flag'), '1') } catch {}
-      autoUpdater.quitAndInstall(true, true)
-    }
+    // 由前端 banner 處理「立即重啟/稍後」，此處不再顯示 native dialog
   })
 
   // 啟動 5 秒後檢查一次
