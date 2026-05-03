@@ -1,6 +1,6 @@
 {
   "name": "bruv-ai-kb",
-  "version": "1.0.38",
+  "version": "1.0.39",
   "description": "BruV AI 知識庫 — 桌面版",
   "main": "main.js",
   "scripts": {
@@ -41,7 +41,8 @@
     "win": {
       "target": "nsis",
       "icon": "assets/icon.ico",
-      "signAndEditExecutable": false
+      "signAndEditExecutable": false,
+      "artifactName": "BruV.AI.Setup.${version}.${ext}"
     },
     "mac": {
       "target": "dmg",
