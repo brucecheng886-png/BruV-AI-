@@ -99,6 +99,17 @@ if ($dcExit -ne 0) {
     }
 }
 
+# 確保 nginx（port 80）正在跑，若停止則重新啟動
+$nginxRunning = docker ps --filter "name=bruv_ai_nginx" --filter "status=running" -q 2>$null
+if (-not $nginxRunning) {
+    Write-Warn "nginx 容器未運行，嘗試重新啟動..."
+    docker start bruv_ai_nginx 2>$null | Out-Null
+    Start-Sleep 1
+    $nginxRunning = docker ps --filter "name=bruv_ai_nginx" --filter "status=running" -q 2>$null
+    if ($nginxRunning) { Write-Ok "nginx 已重新啟動" }
+    else { Write-Warn "nginx 啟動失敗，Electron 可能卡在 splash 畫面" }
+}
+
 Write-Ok "所有容器已啟動"
 
 # ── Step 3：並行等待各服務健康檢查 ───────────────────────────────────────────
