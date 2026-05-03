@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
     BruV AI 開發模式啟動腳本
@@ -10,7 +10,7 @@
 #>
 
 Set-StrictMode -Version Latest
-$ErrorActionPreference = 'Stop'
+$ErrorActionPreference = 'Continue'
 
 # ── 工作目錄 ──────────────────────────────────────────────────────────────────
 $ROOT = Split-Path $PSScriptRoot -Parent
@@ -82,16 +82,21 @@ Write-Ok "Docker 已就緒"
 # ── Step 2：docker compose up ─────────────────────────────────────────────────
 Write-Step 2 $TOTAL_STEPS "啟動 / 確認後端容器..."
 
-docker compose up -d --remove-orphans 2>&1 | ForEach-Object {
-    if ($_ -match "(Starting|Started|Created|Healthy|Running)") {
-        Write-Info $_
-    }
-}
+$dcOutput = docker compose up -d --remove-orphans 2>&1
+$dcExit = $LASTEXITCODE
 
-if ($LASTEXITCODE -ne 0) {
-    Write-Fail "docker compose 啟動失敗，請檢查 .env 設定與 Docker 狀態。"
-    Read-Host "按 Enter 結束"
-    exit 1
+if ($dcExit -ne 0) {
+    # compose 失敗可能是 name conflict（容器由另一個 project 啟動）
+    # 直接檢查關鍵容器是否已在運行，若是就繼續
+    $running = docker ps --filter "name=bruv_ai_backend" --filter "status=running" -q 2>$null
+    if ($running) {
+        Write-Warn "docker compose 回報非零（可能 project 名稱不符），但容器已在運行，繼續..."
+    } else {
+        $dcOutput | ForEach-Object { Write-Info $_ }
+        Write-Fail "docker compose 啟動失敗，請檢查 .env 設定與 Docker 狀態。"
+        Read-Host "按 Enter 結束"
+        exit 1
+    }
 }
 
 Write-Ok "所有容器已啟動"
