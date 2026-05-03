@@ -1,0 +1,10 @@
+
+> bruv-ai-kb@1.0.24 dist
+> electron-builder --win
+
+  • electron-builder  version=24.13.3 os=10.0.26200
+  • loaded configuration  file=package.json ("build" field)
+  • author is missed in the package.json  appPackageFile=C:\Users\bruce\PycharmProjects\BruV AI新架構\electron\package.json
+  • packaging       platform=win32 arch=x64 electron=30.5.1 appOutDir=dist\win-unpacked
+  • building        target=nsis file=dist\BruV AI Setup 1.0.24.exe archs=x64 oneClick=false perMachine=false
+  • building block map  blockMapFile=dist\BruV AI Setup 1.0.24.exe.blockmap

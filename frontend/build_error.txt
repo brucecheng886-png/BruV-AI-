@@ -1,0 +1,13 @@
+﻿node : [33mThe CJS build of Vite's Node API is deprecated. See https://vite.de
+v/guide/troubleshooting.html#vite-cjs-node-api-deprecated for more details.[39
+m
+位於 線路:1 字元:59
++ ... 新架構\frontend" ; node node_modules/vite/bin/vite.js build 2>&1 | Out-F ...
++                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: ([33mThe CJS bu...e details.[39m 
+   :String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+[36mvite v5.4.21 [32mbuilding for production...[36m[39m
+transforming...
+[32m??[39m 3734 modules transformed.

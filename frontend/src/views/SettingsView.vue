@@ -23,7 +23,12 @@
           </div>
           <div class="section-body">
             <!-- 地端模型 -->
-            <div class="model-group-title">地端模型</div>
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+              <div class="model-group-title" style="margin-bottom:0;">地端模型</div>
+              <el-button size="small" @click="openPullDialog">
+                <Download :size="13" :stroke-width="1.5" style="margin-right:4px;vertical-align:middle" />下載模型
+              </el-button>
+            </div>
             <el-table :data="models.filter(m => m.provider === 'ollama')" v-loading="loading" stripe style="width:100%;" empty-text="尚無地端模型">
               <el-table-column label="名稱" prop="name" min-width="160" />
               <el-table-column label="類型" width="100" align="center">
@@ -664,6 +669,42 @@
         <el-button type="primary" :loading="saving" @click="saveModel">儲存</el-button>
       </template>
     </el-dialog>
+
+    <!-- Pull Ollama Model Dialog -->
+    <el-dialog v-model="showPullDialog" title="下載 Ollama 模型" width="480px" :close-on-click-modal="pullStatus !== 'pulling'" @closed="onPullDialogClosed">
+      <div style="margin-bottom:16px;">
+        <div style="font-size:13px;color:#606266;margin-bottom:8px;">輸入或選擇要下載的模型名稱</div>
+        <el-select
+          v-model="pullModelName"
+          filterable
+          allow-create
+          default-first-option
+          placeholder="如: qwen2.5:14b 或 llama3.2:3b"
+          style="width:100%;"
+          :disabled="pullStatus === 'pulling'"
+        >
+          <el-option-group v-for="group in MODEL_PRESETS.ollama" :key="group.label" :label="group.label">
+            <el-option v-for="m in group.options" :key="m.value" :label="m.label" :value="m.value" />
+          </el-option-group>
+        </el-select>
+      </div>
+      <div v-if="pullStatus !== 'idle'" style="margin-bottom:8px;">
+        <el-progress
+          :percentage="pullPercent"
+          :status="pullStatus === 'done' ? 'success' : pullStatus === 'error' ? 'exception' : undefined"
+          :striped="pullStatus === 'pulling'"
+          :striped-flow="pullStatus === 'pulling'"
+          :duration="6"
+        />
+        <div style="font-size:12px;color:#909399;margin-top:6px;word-break:break-all;">{{ pullStatusText }}</div>
+      </div>
+      <template #footer>
+        <el-button @click="showPullDialog = false" :disabled="pullStatus === 'pulling'">關閉</el-button>
+        <el-button type="primary" :loading="pullStatus === 'pulling'" :disabled="!pullModelName || pullStatus === 'pulling'" @click="startPull">
+          {{ pullStatus === 'done' ? '重新下載' : '開始下載' }}
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -671,7 +712,7 @@
 import { ref, onMounted, onActivated, reactive, defineComponent, computed } from 'vue'
 import { useRoute } from 'vue-router'
 import { Refresh, Check } from '@element-plus/icons-vue'
-import { Layers, FolderOpen, MessageSquare, Network, Puzzle, Settings, Dna, Cpu, Key, Sliders, HardDrive, Database, Bot, User, Link, BookOpen, Mail } from 'lucide-vue-next'
+import { Layers, FolderOpen, MessageSquare, Network, Puzzle, Settings, Dna, Cpu, Key, Sliders, HardDrive, Database, Bot, User, Link, BookOpen, Mail, Download } from 'lucide-vue-next'
 import { wikiApi, systemSettingsApi, agentSkillsApi, monitoringApi, authApi } from '../api/index.js'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuthStore } from '../stores/auth.js'
@@ -858,8 +899,9 @@ const MODEL_PRESETS = {
   ],
   anthropic: [
     { label: 'Claude 4 系列', options: [
-      { label: 'claude-opus-4-5',    value: 'claude-opus-4-5' },
-      { label: 'claude-sonnet-4-5',  value: 'claude-sonnet-4-5' },
+      { label: 'claude-opus-4-7',    value: 'claude-opus-4-7' },
+      { label: 'claude-sonnet-4-6',  value: 'claude-sonnet-4-6' },
+      { label: 'claude-haiku-4-5',   value: 'claude-haiku-4-5' },
     ]},
     { label: 'Claude 3.5 系列', options: [
       { label: 'claude-3-5-sonnet-20241022', value: 'claude-3-5-sonnet-20241022' },
@@ -1098,6 +1140,100 @@ async function loadModels() {
     loading.value = false
   }
 }
+
+// ── Ollama Pull ───────────────────────────────────────────────────────────────
+const showPullDialog = ref(false)
+const pullModelName  = ref('')
+const pullStatus     = ref('idle')   // 'idle' | 'pulling' | 'done' | 'error'
+const pullPercent    = ref(0)
+const pullStatusText = ref('')
+
+function openPullDialog() {
+  pullModelName.value  = ''
+  pullStatus.value     = 'idle'
+  pullPercent.value    = 0
+  pullStatusText.value = ''
+  showPullDialog.value = true
+}
+
+function onPullDialogClosed() {
+  if (pullStatus.value === 'done') loadModels()
+}
+
+async function startPull() {
+  if (!pullModelName.value) return
+  pullStatus.value     = 'pulling'
+  pullPercent.value    = 0
+  pullStatusText.value = '連線中…'
+
+  let resp
+  try {
+    resp = await systemSettingsApi.pullOllamaModel(pullModelName.value)
+  } catch (e) {
+    pullStatus.value     = 'error'
+    pullStatusText.value = `連線失敗：${e.message}`
+    return
+  }
+
+  if (!resp.ok) {
+    pullStatus.value     = 'error'
+    pullStatusText.value = `伺服器錯誤 ${resp.status}`
+    return
+  }
+
+  const reader = resp.body.getReader()
+  const decoder = new TextDecoder()
+  let buf = ''
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buf += decoder.decode(value, { stream: true })
+      const lines = buf.split('\n')
+      buf = lines.pop()
+      for (const line of lines) {
+        if (!line.startsWith('data:')) continue
+        const raw = line.slice(5).trim()
+        if (raw === '[DONE]') {
+          pullStatus.value     = 'done'
+          pullPercent.value    = 100
+          pullStatusText.value = '下載完成！'
+          ElMessage.success(`模型 ${pullModelName.value} 下載完成`)
+          return
+        }
+        let chunk
+        try { chunk = JSON.parse(raw) } catch { continue }
+        if (chunk.error) {
+          pullStatus.value     = 'error'
+          pullStatusText.value = chunk.error
+          return
+        }
+        // Ollama 進度格式：{ status, total, completed, digest }
+        const statusStr = chunk.status || ''
+        pullStatusText.value = chunk.digest
+          ? `${statusStr} — ${chunk.digest.slice(0, 24)}…`
+          : statusStr
+        if (chunk.total && chunk.total > 0) {
+          pullPercent.value = Math.round((chunk.completed || 0) / chunk.total * 100)
+        } else if (statusStr === 'success') {
+          pullPercent.value = 100
+        }
+      }
+    }
+    // stream ended without [DONE]
+    if (pullStatus.value === 'pulling') {
+      pullStatus.value     = 'done'
+      pullPercent.value    = 100
+      pullStatusText.value = '下載完成！'
+      ElMessage.success(`模型 ${pullModelName.value} 下載完成`)
+    }
+  } catch (e) {
+    pullStatus.value     = 'error'
+    pullStatusText.value = `讀取串流失敗：${e.message}`
+  }
+}
+
 
 function openNewDialog() {
   editingId.value = null

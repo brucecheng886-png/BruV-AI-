@@ -288,6 +288,18 @@ export const systemSettingsApi = {
     apiFetch('/api/settings/chat', { headers: getHeaders(false) }).then(handleResponse),
   saveChatBehavior: (body) =>
     apiFetch('/api/settings/chat', { method: 'POST', headers: getHeaders(), body: JSON.stringify(body) }).then(handleResponse),
+  // Ollama 模型下載（回傳 raw Response 供 SSE 解析）
+  pullOllamaModel: (modelName) => {
+    const auth = useAuthStore()
+    return fetch('/api/settings/ollama/pull', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(auth.token ? { 'Authorization': `Bearer ${auth.token}` } : {}),
+      },
+      body: JSON.stringify({ model: modelName }),
+    })
+  },
 }
 
 // ── Auth API（個人資料 / 修改密碼 / 取得當前使用者）──────────────

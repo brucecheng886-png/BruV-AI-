@@ -15,6 +15,7 @@ POST /api/settings/user/change-password 修改密碼
 import gzip
 import json
 import logging
+import re
 import smtplib
 import ssl as _ssl
 from datetime import datetime, timezone
@@ -23,6 +24,7 @@ from typing import Optional
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -834,4 +836,53 @@ async def test_smtp(
         raise HTTPException(status_code=502, detail=f"SMTP 發送失敗：{e}")
 
     return {"ok": True, "message": f"測試郵件已寄送至 {to_email}"}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Ollama 模型下載（SSE 串流進度）
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class OllamaPullBody(BaseModel):
+    model: str
+
+
+@router.post("/ollama/pull")
+async def pull_ollama_model(
+    body: OllamaPullBody,
+    current_user: CurrentAdmin = None,
+):
+    """透過 Ollama 下載模型，以 SSE 串流回傳進度。"""
+    model_name = body.model.strip()
+    if not model_name or not re.match(r'^[\w./:@-]+$', model_name):
+        raise HTTPException(status_code=400, detail="無效的模型名稱")
+
+    async def event_stream():
+        try:
+            async with httpx.AsyncClient(timeout=None) as client:
+                async with client.stream(
+                    "POST",
+                    f"{app_settings.OLLAMA_BASE_URL}/api/pull",
+                    json={"name": model_name, "stream": True},
+                ) as resp:
+                    if resp.status_code != 200:
+                        err_body = await resp.aread()
+                        err_text = err_body[:200].decode("utf-8", errors="replace")
+                        payload = json.dumps({"error": f"Ollama 回傳 {resp.status_code}: {err_text}"})
+                        yield f"data: {payload}\n\n"
+                        return
+                    async for line in resp.aiter_lines():
+                        if not line:
+                            continue
+                        try:
+                            chunk = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        yield f"data: {json.dumps(chunk)}\n\n"
+        except Exception as e:
+            logger.error("Ollama pull error: %s", e)
+            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+        finally:
+            yield "data: [DONE]\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
