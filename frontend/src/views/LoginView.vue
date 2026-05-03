@@ -1,19 +1,5 @@
 <template>
   <div class="login-page">
-    <!-- Electron 規控按鈕（展開时裁切區域 + 深色圆形按鈕） -->
-    <div v-if="isElectron" class="login-titlebar">
-      <div class="login-wc-btns">
-        <button class="login-wc-btn" @click="winMinimize" title="最小化">
-          <svg width="10" height="2" viewBox="0 0 10 2"><rect width="10" height="2" rx="1" fill="currentColor"/></svg>
-        </button>
-        <button class="login-wc-btn" @click="winMaximize" title="全螢幕">
-          <svg width="10" height="10" viewBox="0 0 10 10"><rect x="0.75" y="0.75" width="8.5" height="8.5" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
-        </button>
-        <button class="login-wc-btn login-wc-btn--close" @click="winQuit" title="關閉">
-          <svg width="10" height="10" viewBox="0 0 10 10"><path d="M1.5 1.5 L8.5 8.5 M8.5 1.5 L1.5 8.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-        </button>
-      </div>
-    </div>
     <!-- 左側：品牌視覺 -->
     <div class="brand-pane">
       <svg class="bg-lines" viewBox="0 0 600 800" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid slice">
@@ -119,7 +105,7 @@
 </template>
 
 <script setup>
-import { reactive, ref } from 'vue'
+import { reactive, ref, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { Eye, EyeOff } from 'lucide-vue-next'
 import { useAuthStore } from '../stores/auth.js'
@@ -132,11 +118,13 @@ const showPassword = ref(false)
 const loading = ref(false)
 const error   = ref('')
 
-// Electron 規控按鈕
-const isElectron = typeof window !== 'undefined' && !!window.electronApp?.version
-function winMinimize () { window.electronApp?.minimize?.() }
-function winMaximize () { window.electronApp?.maximize?.() }
-function winQuit     () { window.electronApp?.quit?.() }
+// 登入頁為深色背景，將 titleBarOverlay 切換成深色，離開時還原
+onMounted(() => {
+  window.electronApp?.setTheme?.('dark')
+})
+onUnmounted(() => {
+  window.electronApp?.setTheme?.('light')
+})
 
 async function handleLogin () {
   error.value = ''
@@ -354,44 +342,4 @@ async function handleLogin () {
   .brand-pane { display: none; }
   .form-pane { flex: 1 1 100%; }
 }
-/* ── Electron 規控按鈕（登入頁深色圖索） ──────────── */
-.login-titlebar {
-  position: fixed;
-  top: 0; left: 0; right: 0;
-  height: 38px;
-  -webkit-app-region: drag;
-  z-index: 200;
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  padding-right: 10px;
-}
-.login-wc-btns {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  -webkit-app-region: no-drag;
-}
-.login-wc-btn {
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  border: none;
-  background: rgba(255,255,255,0.10);
-  color: rgba(255,255,255,0.55);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: background 0.12s, color 0.12s;
-  outline: none;
-  flex-shrink: 0;
-}
-.login-wc-btn:hover {
-  background: rgba(255,255,255,0.22);
-  color: #fff;
-}
-.login-wc-btn--close:hover {
-  background: rgba(239,68,68,0.60);
-  color: #fff;
-}</style>
+</style>
