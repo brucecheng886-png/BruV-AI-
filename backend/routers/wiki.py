@@ -323,9 +323,17 @@ async def verify_model(
                         "anthropic-version": "2023-06-01",
                     },
                 )
-                if resp.status_code == 200:
-                    return {"ok": True, "message": "✓ Anthropic 連線成功"}
-                return {"ok": False, "message": f"Anthropic 驗證失敗：HTTP {resp.status_code}: {resp.text[:200]}"}
+                if resp.status_code != 200:
+                    return {"ok": False, "message": f"Anthropic 驗證失敗：HTTP {resp.status_code}: {resp.text[:200]}"}
+                # 確認指定的 model_name 是否在可用清單中
+                available_ids = [m.get("id", "") for m in resp.json().get("data", [])]
+                if body.model_name and available_ids and body.model_name not in available_ids:
+                    avail_str = "、".join(available_ids[:6])
+                    return {
+                        "ok": False,
+                        "message": f"API Key 有效，但模型 '{body.model_name}' 不在您帳號的可用清單中。\n可用模型：{avail_str}",
+                    }
+                return {"ok": True, "message": f"✓ Anthropic 連線成功（{body.model_name}）"}
             elif body.provider in _TEST_URLS:
                 if not effective_key:
                     return {"ok": False, "message": "需要 API Key"}
@@ -336,7 +344,16 @@ async def verify_model(
                 if r.status_code != 200:
                     detail = r.text[:200]
                     return {"ok": False, "message": f"HTTP {r.status_code}: {detail}"}
-                return {"ok": True, "message": f"✓ {body.provider} API 連線成功"}
+                # 確認指定的 model_name 是否在可用清單中
+                _resp_data = r.json()
+                available_ids = [m.get("id", "") for m in _resp_data.get("data", [])]
+                if body.model_name and available_ids and body.model_name not in available_ids:
+                    avail_str = "、".join(available_ids[:6])
+                    return {
+                        "ok": False,
+                        "message": f"API Key 有效，但模型 '{body.model_name}' 不在可用清單中。\n可用模型：{avail_str}",
+                    }
+                return {"ok": True, "message": f"✓ {body.provider} API 連線成功（{body.model_name}）"}
             else:
                 return {"ok": False, "message": f"未知的 provider: {body.provider}"}
     except Exception as e:
