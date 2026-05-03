@@ -25,8 +25,8 @@
             <!-- 地端模型 -->
             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
               <div class="model-group-title" style="margin-bottom:0;">地端模型</div>
-              <el-button size="small" @click="openPullDialog">
-                <Download :size="13" :stroke-width="1.5" style="margin-right:4px;vertical-align:middle" />下載模型
+              <el-button size="small" @click="openModelHub">
+                <Download :size="13" :stroke-width="1.5" style="margin-right:4px;vertical-align:middle" />瀏覽模型
               </el-button>
             </div>
             <el-table :data="models.filter(m => m.provider === 'ollama')" v-loading="loading" stripe style="width:100%;" empty-text="尚無地端模型">
@@ -670,39 +670,112 @@
       </template>
     </el-dialog>
 
-    <!-- Pull Ollama Model Dialog -->
-    <el-dialog v-model="showPullDialog" title="下載 Ollama 模型" width="480px" :close-on-click-modal="pullStatus !== 'pulling'" @closed="onPullDialogClosed">
-      <div style="margin-bottom:16px;">
-        <div style="font-size:13px;color:#606266;margin-bottom:8px;">輸入或選擇要下載的模型名稱</div>
-        <el-select
-          v-model="pullModelName"
-          filterable
-          allow-create
-          default-first-option
-          placeholder="如: qwen2.5:14b 或 llama3.2:3b"
-          style="width:100%;"
-          :disabled="pullStatus === 'pulling'"
+    <!-- Model Hub Dialog -->
+    <el-dialog
+      v-model="showModelHub"
+      title="Model Hub"
+      width="min(92vw, 940px)"
+      :close-on-click-modal="false"
+      @closed="onHubClosed"
+      class="model-hub-dialog"
+    >
+      <!-- Tab 切換 -->
+      <div class="hub-tabs">
+        <button class="hub-tab" :class="{ active: hubTab === 'local' }" @click="hubTab = 'local'">
+          <HardDrive :size="14" :stroke-width="1.5" style="margin-right:5px;vertical-align:middle" />地端模型
+        </button>
+        <button class="hub-tab" :class="{ active: hubTab === 'cloud' }" @click="hubTab = 'cloud'">
+          <Cloud :size="14" :stroke-width="1.5" style="margin-right:5px;vertical-align:middle" />雲端模型
+        </button>
+      </div>
+
+      <!-- 地端 tab -->
+      <div v-if="hubTab === 'local'" class="hub-body">
+        <div v-for="group in OLLAMA_CATALOG" :key="group.family" class="hub-family">
+          <div class="hub-family-title">{{ group.family }}</div>
+          <div class="hub-card-grid">
+            <div
+              v-for="item in group.items"
+              :key="item.name"
+              class="hub-card"
+              :class="{ 'hub-card--done': getPullState(item.name).status === 'done' }"
+            >
+              <div class="hub-card-top">
+                <div class="hub-card-name">{{ item.name }}</div>
+                <span class="hub-card-size">{{ item.size }}</span>
+              </div>
+              <div class="hub-card-desc">{{ item.desc }}</div>
+              <div class="hub-card-tags">
+                <span v-for="t in item.tags" :key="t" class="hub-tag" :class="'hub-tag--' + t">{{ t }}</span>
+              </div>
+              <div class="hub-card-footer">
+                <template v-if="getPullState(item.name).status === 'idle'">
+                  <el-button size="small" type="primary" plain @click="startHubPull(item.name)">下載</el-button>
+                </template>
+                <template v-else-if="getPullState(item.name).status === 'pulling'">
+                  <el-progress
+                    :percentage="getPullState(item.name).percent"
+                    :striped="true" :striped-flow="true" :duration="5"
+                    style="width:100%;margin-bottom:4px;"
+                  />
+                  <div class="hub-prog-text">{{ getPullState(item.name).text }}</div>
+                </template>
+                <template v-else-if="getPullState(item.name).status === 'done'">
+                  <span class="hub-done-label">✓ 已下載</span>
+                </template>
+                <template v-else-if="getPullState(item.name).status === 'error'">
+                  <el-tooltip :content="getPullState(item.name).text" placement="top">
+                    <span class="hub-error-label">下載失敗</span>
+                  </el-tooltip>
+                  <el-button size="small" plain style="margin-left:6px;" @click="startHubPull(item.name)">重試</el-button>
+                </template>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 雲端 tab -->
+      <div v-if="hubTab === 'cloud'" class="hub-body">
+        <div
+          v-for="prov in PROVIDER_DEFS.filter(p => p.key !== 'ollama' && MODEL_PRESETS[p.key])"
+          :key="prov.key"
+          class="hub-family"
         >
-          <el-option-group v-for="group in MODEL_PRESETS.ollama" :key="group.label" :label="group.label">
-            <el-option v-for="m in group.options" :key="m.value" :label="m.label" :value="m.value" />
-          </el-option-group>
-        </el-select>
+          <div class="hub-family-title" style="display:flex;align-items:center;gap:8px;">
+            <img
+              v-if="!failedLogos.has(prov.key)"
+              :src="prov.logo" :alt="prov.name"
+              width="16" height="16"
+              style="border-radius:3px;object-fit:contain;"
+              @error="onLogoError(prov.key)"
+            />
+            {{ prov.name }}
+          </div>
+          <div class="hub-card-grid">
+            <template v-for="group in MODEL_PRESETS[prov.key]" :key="group.label">
+              <div
+                v-for="m in group.options"
+                :key="m.value"
+                class="hub-card hub-card--cloud"
+              >
+                <div class="hub-card-top">
+                  <div class="hub-card-name">{{ m.label }}</div>
+                </div>
+                <div class="hub-card-tags">
+                  <span class="hub-tag hub-tag--chat">chat</span>
+                </div>
+                <div class="hub-card-footer">
+                  <el-button size="small" type="primary" plain @click="addCloudModel(prov.key, m.value)">新增</el-button>
+                </div>
+              </div>
+            </template>
+          </div>
+        </div>
       </div>
-      <div v-if="pullStatus !== 'idle'" style="margin-bottom:8px;">
-        <el-progress
-          :percentage="pullPercent"
-          :status="pullStatus === 'done' ? 'success' : pullStatus === 'error' ? 'exception' : undefined"
-          :striped="pullStatus === 'pulling'"
-          :striped-flow="pullStatus === 'pulling'"
-          :duration="6"
-        />
-        <div style="font-size:12px;color:#909399;margin-top:6px;word-break:break-all;">{{ pullStatusText }}</div>
-      </div>
+
       <template #footer>
-        <el-button @click="showPullDialog = false" :disabled="pullStatus === 'pulling'">關閉</el-button>
-        <el-button type="primary" :loading="pullStatus === 'pulling'" :disabled="!pullModelName || pullStatus === 'pulling'" @click="startPull">
-          {{ pullStatus === 'done' ? '重新下載' : '開始下載' }}
-        </el-button>
+        <el-button @click="showModelHub = false">關閉</el-button>
       </template>
     </el-dialog>
   </div>
@@ -712,7 +785,7 @@
 import { ref, onMounted, onActivated, reactive, defineComponent, computed } from 'vue'
 import { useRoute } from 'vue-router'
 import { Refresh, Check } from '@element-plus/icons-vue'
-import { Layers, FolderOpen, MessageSquare, Network, Puzzle, Settings, Dna, Cpu, Key, Sliders, HardDrive, Database, Bot, User, Link, BookOpen, Mail, Download } from 'lucide-vue-next'
+import { Layers, FolderOpen, MessageSquare, Network, Puzzle, Settings, Dna, Cpu, Key, Sliders, HardDrive, Database, Bot, User, Link, BookOpen, Mail, Download, Cloud } from 'lucide-vue-next'
 import { wikiApi, systemSettingsApi, agentSkillsApi, monitoringApi, authApi } from '../api/index.js'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuthStore } from '../stores/auth.js'
@@ -952,6 +1025,50 @@ const MODEL_PRESETS = {
     ]},
   ],
 }
+
+const OLLAMA_CATALOG = [
+  { family: 'Qwen 2.5', items: [
+    { name: 'qwen2.5:7b',        size: '4.7 GB', desc: '通用對話，適合日常任務',        tags: ['chat'] },
+    { name: 'qwen2.5:14b',       size: '9.0 GB', desc: '強化推理，平衡速度與能力',      tags: ['chat'] },
+    { name: 'qwen2.5:32b',       size: '20 GB',  desc: '大型模型，接近前沿水準',         tags: ['chat'] },
+    { name: 'qwen2.5:72b',       size: '47 GB',  desc: '最強 Qwen，需 48GB+ VRAM',              tags: ['chat'] },
+    { name: 'qwen2.5-coder:7b',  size: '4.7 GB', desc: '程式碼生成與補全',              tags: ['chat', 'code'] },
+    { name: 'qwen2.5-coder:14b', size: '9.0 GB', desc: '進階程式碼助理',                  tags: ['chat', 'code'] },
+  ]},
+  { family: 'Llama 3', items: [
+    { name: 'llama3.2:1b',  size: '1.3 GB', desc: '超輕量，適合邊緣裝置',             tags: ['chat'] },
+    { name: 'llama3.2:3b',  size: '2.0 GB', desc: '輕量快速，日常對話',                tags: ['chat'] },
+    { name: 'llama3.1:8b',  size: '4.9 GB', desc: '主流選擇，速度與品質均衡',     tags: ['chat'] },
+    { name: 'llama3.1:70b', size: '43 GB',  desc: '高效能大型模型',                   tags: ['chat'] },
+  ]},
+  { family: 'Gemma 3', items: [
+    { name: 'gemma3:4b',  size: '3.3 GB', desc: 'Google 輕量多模態模型',   tags: ['chat', 'vision'] },
+    { name: 'gemma3:12b', size: '8.1 GB', desc: 'Google 中型多模態模型',   tags: ['chat', 'vision'] },
+    { name: 'gemma3:27b', size: '17 GB',  desc: 'Google 大型多模態模型',   tags: ['chat', 'vision'] },
+  ]},
+  { family: 'DeepSeek R1', items: [
+    { name: 'deepseek-r1:7b',  size: '4.7 GB', desc: '推理強化模型，適合分析任務', tags: ['chat'] },
+    { name: 'deepseek-r1:14b', size: '9.0 GB', desc: '進階推理，支援 Chain-of-Thought',   tags: ['chat'] },
+  ]},
+  { family: 'Phi 4', items: [
+    { name: 'phi4:14b', size: '9.1 GB', desc: 'Microsoft 高效小型模型', tags: ['chat'] },
+  ]},
+  { family: 'Mistral', items: [
+    { name: 'mistral:7b',    size: '4.1 GB', desc: '歐洲頂尖開源模型',   tags: ['chat'] },
+    { name: 'mixtral:8x7b', size: '26 GB',  desc: 'MoE 架構，具備高速推理', tags: ['chat'] },
+  ]},
+  { family: 'Vision', items: [
+    { name: 'llava:7b',        size: '4.7 GB', desc: '支援圖片輸入的多模態模型',     tags: ['chat', 'vision'] },
+    { name: 'llava-llama3:8b', size: '5.5 GB', desc: 'LLaVA + Llama3 基底多模態模型', tags: ['chat', 'vision'] },
+  ]},
+  { family: 'Embedding', items: [
+    { name: 'nomic-embed-text',  size: '274 MB', desc: '通用文字嵌入模型',              tags: ['embedding'] },
+    { name: 'mxbai-embed-large', size: '670 MB', desc: '高品質大型嵌入模型',            tags: ['embedding'] },
+    { name: 'bge-m3',            size: '1.2 GB', desc: '多語言嵌入，支援中文',          tags: ['embedding'] },
+    { name: 'all-minilm',        size: '46 MB',  desc: '超輕量句子嵌入',                    tags: ['embedding'] },
+  ]},
+]
+
 const failedLogos = ref(new Set())
 function onLogoError(key) { failedLogos.value = new Set([...failedLogos.value, key]) }
 const selectedProvider = ref(null)
@@ -1141,43 +1258,45 @@ async function loadModels() {
   }
 }
 
-// ── Ollama Pull ───────────────────────────────────────────────────────────────
-const showPullDialog = ref(false)
-const pullModelName  = ref('')
-const pullStatus     = ref('idle')   // 'idle' | 'pulling' | 'done' | 'error'
-const pullPercent    = ref(0)
-const pullStatusText = ref('')
+// ── Model Hub ─────────────────────────────────────────────────────────────────
+const showModelHub = ref(false)
+const hubTab       = ref('local')
+const hubPullState = reactive({}) // { [modelName]: { status, percent, text } }
 
-function openPullDialog() {
-  pullModelName.value  = ''
-  pullStatus.value     = 'idle'
-  pullPercent.value    = 0
-  pullStatusText.value = ''
-  showPullDialog.value = true
+function getPullState(name) {
+  if (!hubPullState[name]) hubPullState[name] = { status: 'idle', percent: 0, text: '' }
+  return hubPullState[name]
 }
 
-function onPullDialogClosed() {
-  if (pullStatus.value === 'done') loadModels()
+function openModelHub() {
+  hubTab.value = 'local'
+  showModelHub.value = true
 }
 
-async function startPull() {
-  if (!pullModelName.value) return
-  pullStatus.value     = 'pulling'
-  pullPercent.value    = 0
-  pullStatusText.value = '連線中…'
+function onHubClosed() {
+  const anyDone = Object.values(hubPullState).some(s => s.status === 'done')
+  if (anyDone) loadModels()
+}
+
+async function startHubPull(modelName) {
+  const state = getPullState(modelName)
+  if (state.status === 'pulling') return
+  state.status = 'pulling'
+  state.percent = 0
+  state.text = '連線中…'
 
   let resp
   try {
-    resp = await systemSettingsApi.pullOllamaModel(pullModelName.value)
+    resp = await systemSettingsApi.pullOllamaModel(modelName)
   } catch (e) {
-    pullStatus.value     = 'error'
-    pullStatusText.value = `連線失敗：${e.message}`
+    state.status = 'error'
+    state.text = `連線失敗：${e.message}`
     return
   }
 
   if (!resp.ok) {
-    pullStatus.value     = 'error'
-    pullStatusText.value = `伺服器錯誤 ${resp.status}`
+    state.status = 'error'
+    state.text = `伺服器錯誤 ${resp.status}`
     return
   }
 
@@ -1196,42 +1315,46 @@ async function startPull() {
         if (!line.startsWith('data:')) continue
         const raw = line.slice(5).trim()
         if (raw === '[DONE]') {
-          pullStatus.value     = 'done'
-          pullPercent.value    = 100
-          pullStatusText.value = '下載完成！'
-          ElMessage.success(`模型 ${pullModelName.value} 下載完成`)
+          state.status = 'done'
+          state.percent = 100
+          state.text = '下載完成！'
+          ElMessage.success(`模型 ${modelName} 下載完成`)
           return
         }
         let chunk
         try { chunk = JSON.parse(raw) } catch { continue }
         if (chunk.error) {
-          pullStatus.value     = 'error'
-          pullStatusText.value = chunk.error
+          state.status = 'error'
+          state.text = chunk.error
           return
         }
-        // Ollama 進度格式：{ status, total, completed, digest }
         const statusStr = chunk.status || ''
-        pullStatusText.value = chunk.digest
+        state.text = chunk.digest
           ? `${statusStr} — ${chunk.digest.slice(0, 24)}…`
           : statusStr
         if (chunk.total && chunk.total > 0) {
-          pullPercent.value = Math.round((chunk.completed || 0) / chunk.total * 100)
+          state.percent = Math.round((chunk.completed || 0) / chunk.total * 100)
         } else if (statusStr === 'success') {
-          pullPercent.value = 100
+          state.percent = 100
         }
       }
     }
-    // stream ended without [DONE]
-    if (pullStatus.value === 'pulling') {
-      pullStatus.value     = 'done'
-      pullPercent.value    = 100
-      pullStatusText.value = '下載完成！'
-      ElMessage.success(`模型 ${pullModelName.value} 下載完成`)
+    if (state.status === 'pulling') {
+      state.status = 'done'
+      state.percent = 100
+      state.text = '下載完成！'
+      ElMessage.success(`模型 ${modelName} 下載完成`)
     }
   } catch (e) {
-    pullStatus.value     = 'error'
-    pullStatusText.value = `讀取串流失敗：${e.message}`
+    state.status = 'error'
+    state.text = `讀取串流失敗：${e.message}`
   }
+}
+
+function addCloudModel(provider, name) {
+  showModelHub.value = false
+  openNewDialogForProvider(provider)
+  modelForm.name = name
 }
 
 
@@ -1969,5 +2092,142 @@ async function changePassword() {
 .skill-body { display: flex; flex-direction: column; gap: 8px; }
 .skill-label { font-size: 12px; color: #64748b; }
 .skill-actions { display: flex; justify-content: flex-end; margin-top: 4px; }
+
+/* ── Model Hub ───────────────────────────────────────── */
+.hub-tabs {
+  display: inline-flex;
+  background: #f0f2f5;
+  border-radius: 8px;
+  padding: 3px;
+  gap: 2px;
+  margin-bottom: 20px;
+}
+.hub-tab {
+  padding: 6px 20px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  color: #64748b;
+  display: inline-flex;
+  align-items: center;
+  transition: background 0.15s, color 0.15s, box-shadow 0.15s;
+}
+.hub-tab:hover { color: #334155; }
+.hub-tab.active {
+  background: #fff;
+  color: #1e293b;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.1);
+}
+.hub-body {
+  max-height: 65vh;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+.hub-family {
+  margin-bottom: 24px;
+}
+.hub-family-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #475569;
+  margin-bottom: 10px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid #f0f2f5;
+}
+.hub-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 10px;
+}
+.hub-card {
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: #fff;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.hub-card:hover {
+  border-color: #cbd5e1;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+}
+.hub-card--done {
+  border-color: #86efac;
+  background: #f0fdf4;
+}
+.hub-card--cloud {
+  background: #fafbff;
+}
+.hub-card-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 6px;
+}
+.hub-card-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: #1e293b;
+  word-break: break-all;
+  line-height: 1.4;
+}
+.hub-card-size {
+  font-size: 11px;
+  color: #94a3b8;
+  white-space: nowrap;
+  background: #f1f5f9;
+  padding: 1px 6px;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+.hub-card-desc {
+  font-size: 12px;
+  color: #64748b;
+  line-height: 1.4;
+  flex: 1;
+}
+.hub-card-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.hub-tag {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-weight: 500;
+}
+.hub-tag--chat      { background: #dbeafe; color: #1d4ed8; }
+.hub-tag--code      { background: #fef9c3; color: #a16207; }
+.hub-tag--vision    { background: #fce7f3; color: #9d174d; }
+.hub-tag--embedding { background: #dcfce7; color: #15803d; }
+.hub-card-footer {
+  margin-top: 4px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.hub-prog-text {
+  font-size: 11px;
+  color: #94a3b8;
+  word-break: break-all;
+  width: 100%;
+}
+.hub-done-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #16a34a;
+}
+.hub-error-label {
+  font-size: 12px;
+  color: #dc2626;
+  cursor: help;
+}
 </style>
 

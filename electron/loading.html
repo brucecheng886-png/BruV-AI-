@@ -83,9 +83,62 @@
       0%   { transform: translateX(-120%); }
       100% { transform: translateX(350%); }
     }
+
+    /* ── 規控按鈕 ────────────────────────── */
+    .splash-titlebar {
+      position: fixed;
+      top: 0; left: 0; right: 0;
+      height: 32px;
+      -webkit-app-region: drag;
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      padding: 0 10px;
+      z-index: 100;
+    }
+    .splash-wc-btns {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      -webkit-app-region: no-drag;
+    }
+    .splash-wc-btn {
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      border: none;
+      background: rgba(255,255,255,0.10);
+      color: rgba(255,255,255,0.55);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background 0.12s, color 0.12s;
+      outline: none;
+      flex-shrink: 0;
+    }
+    .splash-wc-btn:hover {
+      background: rgba(255,255,255,0.22);
+      color: #fff;
+    }
+    .splash-wc-btn--close:hover {
+      background: rgba(239,68,68,0.60);
+      color: #fff;
+    }
   </style>
 </head>
 <body>
+  <!-- 規控按鈕：縮小化 + 關閉（啟動画面不需要全螢幕） -->
+  <div class="splash-titlebar">
+    <div class="splash-wc-btns">
+      <button class="splash-wc-btn" onclick="window.loadingBridge?.minimize()" title="最小化">
+        <svg width="10" height="2" viewBox="0 0 10 2"><rect width="10" height="2" rx="1" fill="currentColor"/></svg>
+      </button>
+      <button class="splash-wc-btn splash-wc-btn--close" onclick="window.loadingBridge?.close()" title="關閉">
+        <svg width="10" height="10" viewBox="0 0 10 10"><path d="M1.5 1.5 L8.5 8.5 M8.5 1.5 L1.5 8.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+  </div>
   <div class="logo-block">
     <div class="logo-title">BruV AI</div>
     <div class="logo-sub">Knowledge Base Assistant</div>

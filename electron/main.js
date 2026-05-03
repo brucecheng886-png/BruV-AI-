@@ -277,6 +277,10 @@ function createSplash () {
     }
   })
   splashWindow.loadFile(path.join(__dirname, 'loading.html'))
+
+  // Splash 規控 IPC
+  ipcMain.on('splash:minimize', () => { if (splashWindow && !splashWindow.isDestroyed()) splashWindow.minimize() })
+  ipcMain.on('splash:close',    () => app.quit())
 }
 
 // ── Docker 環境檢測與啟動流程 ─────────────────────────────────────────────
