@@ -8,6 +8,10 @@
   nsExec::Exec 'taskkill /F /IM "BruV AI Helper (Plugin).exe" /T'
   Sleep 3000
 
+  ; 靜默模式 = electron-updater 自動更新（/S 參數）
+  ; 更新時只需結束進程即可，跳過對話框與資料清除，直接讓新版覆蓋安裝
+  IfSilent end_uninstall 0
+
   ; 用 PowerShell WinForms 顯示有勾選欄位的對話框
   ; Exit Code: 0=什麼都不做  1=刪容器（保留資料）  3=刪容器+資料  99=取消解除安裝
   nsExec::ExecToStack 'powershell -NoProfile -WindowStyle Hidden -Command "\
@@ -86,4 +90,6 @@
   ; 清除 electron-updater 暫存目錄（$LOCALAPPDATA\bruv-ai-kb-updater）
   ; 內含已下載的更新安裝程式，不刪除會殘留佔用空間
   nsExec::Exec `powershell -NoProfile -WindowStyle Hidden -Command "Remove-Item -LiteralPath '$LOCALAPPDATA\bruv-ai-kb-updater' -Recurse -Force -ErrorAction SilentlyContinue"`
+
+  end_uninstall:
 !macroend
