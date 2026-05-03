@@ -427,6 +427,12 @@ async function startDockerServices () {
         // 移除殘留的 bruv_ai_network（可能屬於其他 project）
         await new Promise((resolve) => exec('docker network rm bruv_ai_network', { timeout: 15000 }, () => resolve()))
         await runUp()
+      } else if (/dependency failed to start|is unhealthy/i.test(msg)) {
+        // postgres / 其他服務 healthcheck 超時導致依賴服務啟動失敗
+        // 等 20 秒讓 postgres 完全就緒後再執行一次 up（重啟 Error 狀態的容器）
+        updateLoadingStatus('資料庫啟動中，自動重試...')
+        await new Promise((resolve) => setTimeout(resolve, 20000))
+        await runUp()
       } else {
         throw err
       }
