@@ -463,8 +463,8 @@ function createMain () {
     title: 'BruV AI 知識庫',
     titleBarStyle: 'hidden',
     titleBarOverlay: {
-      color: '#f0f0f0',
-      symbolColor: '#555555',
+      color: '#0f0f1a',
+      symbolColor: '#e5e7eb',
       height: 38,
     },
     webPreferences: {
@@ -477,6 +477,12 @@ function createMain () {
   })
 
   mainWindow.loadURL(TARGET_URL)
+
+  // 初始載入時套用深色（登入頁），後續由前端 IPC win-set-theme 接管
+  mainWindow.webContents.once('did-finish-load', () => {
+    if (!mainWindow || typeof mainWindow.setTitleBarOverlay !== 'function') return
+    mainWindow.setTitleBarOverlay({ color: '#0f0f1a', symbolColor: '#e5e7eb', height: 38 })
+  })
 
   // 視窗準備好才顯示（避免白屏閃爍）
   mainWindow.once('ready-to-show', () => {
@@ -521,16 +527,20 @@ function createMain () {
       await stopDockerAndQuit()
       return
     }
+    if (savedPref === 'quit-only') {
+      app.exit(0)
+      return
+    }
 
     // 無記住的偏好 → 顯示對話框
     const { response, checkboxChecked } = await dialog.showMessageBox(mainWindow, {
       type: 'question',
-      buttons: ['收到系統匣', '停止服務並退出', '取消'],
+      buttons: ['收到系統匣', '直接退出', '停止服務並退出', '取消'],
       defaultId: 0,
-      cancelId: 2,
+      cancelId: 3,
       title: 'BruV AI',
       message: '關閉 BruV AI',
-      detail: '收到系統匣：服務繼續運行，下次開啟更快\n停止服務並退出：關閉所有容器，釋放記憶體',
+      detail: '收到系統匣：服務繼續運行，下次開啟更快\n直接退出：關閉應用程式，服務繼續在背景運行\n停止服務並退出：關閉所有容器，釋放記憶體',
       checkboxLabel: '記住我的選擇，不再詢問',
       checkboxChecked: false
     })
@@ -547,12 +557,20 @@ function createMain () {
       if (checkboxChecked) {
         try {
           fs.mkdirSync(path.dirname(prefPath), { recursive: true })
+          fs.writeFileSync(prefPath, JSON.stringify({ preference: 'quit-only' }), 'utf8')
+        } catch {}
+      }
+      app.exit(0)
+    } else if (response === 2) {
+      if (checkboxChecked) {
+        try {
+          fs.mkdirSync(path.dirname(prefPath), { recursive: true })
           fs.writeFileSync(prefPath, JSON.stringify({ preference: 'quit' }), 'utf8')
         } catch {}
       }
       await stopDockerAndQuit()
     }
-    // response === 2 取消：不做任何事
+    // response === 3 取消：不做任何事
   })
 
   // 移除原生選單列（改由前端 TitleBar 處理）

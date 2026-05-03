@@ -1,5 +1,7 @@
 <template>
   <div class="login-page">
+    <!-- Electron 拖動區：titleBarStyle=hidden 時需手動指定 -->
+    <div class="login-drag-bar" />
     <!-- 左側：品牌視覺 -->
     <div class="brand-pane">
       <svg class="bg-lines" viewBox="0 0 600 800" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid slice">
@@ -141,6 +143,16 @@ async function handleLogin () {
 </script>
 
 <style scoped>
+.login-drag-bar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 38px;
+  -webkit-app-region: drag;
+  z-index: 9999;
+}
+
 .login-page {
   display: flex;
   width: 100%;
