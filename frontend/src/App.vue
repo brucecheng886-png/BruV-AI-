@@ -1,6 +1,13 @@
 <template>
   <div v-if="authStore.token" class="app-root">
-    <TitleBar v-if="isElectron" />
+    <!-- 更新中全螢幕遮罩 -->
+    <div v-if="isUpdating" class="update-overlay">
+      <div class="update-overlay-box">
+        <div class="update-spinner"></div>
+        <p class="update-overlay-title">正在安裝更新</p>
+        <p class="update-overlay-sub">應用程式即將自動重新啟動，請稍候…</p>
+      </div>
+    </div>
     <!-- 更新通知橫幅 -->
     <div v-if="updateInfo" class="update-banner" :class="{ 'update-banner--ready': updateInfo.ready }">
       <template v-if="!updateInfo.ready">
@@ -35,7 +42,6 @@
 import { ref, computed, watch, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import NavBar from './components/NavBar.vue'
-import TitleBar from './components/TitleBar.vue'
 import AgentPanel from './components/AgentPanel.vue'
 import { useAuthStore } from './stores/auth.js'
 
@@ -45,6 +51,7 @@ const isElectron = computed(() => !!window.electronApp?.version)
 const appVersion = computed(() => window.electronApp?.version || '')
 const agentPanelOpen = ref(false)
 const updateInfo = ref(null)
+const isUpdating = ref(false)
 
 // 對話頁面不顯示 AgentPanel
 const showAgentPanel = computed(() => route.path !== '/chat' && route.path !== '/')
@@ -52,16 +59,11 @@ const showAgentPanel = computed(() => route.path !== '/chat' && route.path !== '
 // 切成對話頁面時自動關閉面板
 watch(showAgentPanel, (val) => { if (!val) agentPanelOpen.value = false })
 
-function applyTitleBarTheme (token) {
-  if (window.electronApp?.setTheme) {
-    window.electronApp.setTheme(token ? 'light' : 'dark')
-  }
-}
-
-watch(() => authStore.token, applyTitleBarTheme)
-
 function relaunchApp () {
-  window.electronAPI?.relaunchForUpdate?.()
+  isUpdating.value = true
+  setTimeout(() => {
+    window.electronAPI?.relaunchForUpdate?.()
+  }, 1500)
 }
 
 onMounted(() => {
@@ -74,7 +76,6 @@ onMounted(() => {
       updateInfo.value = { ...info, ready: true }
     })
   }
-  applyTitleBarTheme(authStore.token)
 })
 </script>
 
@@ -83,12 +84,46 @@ onMounted(() => {
 body { font-family: -apple-system, 'PingFang TC', sans-serif; }
 
 :root { --titlebar-h: 0px; }
-html.electron-app { --titlebar-h: 38px; }
 
 .app-root { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
 .app-body { flex: 1; display: flex; overflow: hidden; min-height: 0; }
 .app-main { flex: 1; overflow-y: auto; overflow-x: hidden; min-width: 0; transition: padding-right 0.25s ease; }
 .app-main.agent-panel-open { padding-right: 380px; }
+
+/* ── 更新中全螢幕遮罩 ───────────────── */
+.update-overlay {
+  position: fixed;
+  inset: 0;
+  background: #f8f9fa;
+  z-index: 99999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.update-overlay-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+.update-spinner {
+  width: 44px;
+  height: 44px;
+  border: 4px solid #dee2e6;
+  border-top-color: #3b5bdb;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.update-overlay-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: #212529;
+}
+.update-overlay-sub {
+  font-size: 13px;
+  color: #868e96;
+}
 
 /* ── 更新通知橫幅 ───────────────────── */
 .update-banner {

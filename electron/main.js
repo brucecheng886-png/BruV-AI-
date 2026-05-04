@@ -461,12 +461,6 @@ function createMain () {
     minHeight: 600,
     show: false,
     title: 'BruV AI 知識庫',
-    titleBarStyle: 'hidden',
-    titleBarOverlay: {
-      color: '#0f0f1a',
-      symbolColor: '#e5e7eb',
-      height: 38,
-    },
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false,
@@ -477,12 +471,6 @@ function createMain () {
   })
 
   mainWindow.loadURL(TARGET_URL)
-
-  // 初始載入時套用深色（登入頁），後續由前端 IPC win-set-theme 接管
-  mainWindow.webContents.once('did-finish-load', () => {
-    if (!mainWindow || typeof mainWindow.setTitleBarOverlay !== 'function') return
-    mainWindow.setTitleBarOverlay({ color: '#0f0f1a', symbolColor: '#e5e7eb', height: 38 })
-  })
 
   // 視窗準備好才顯示（避免白屏閃爍）
   mainWindow.once('ready-to-show', () => {
@@ -660,15 +648,6 @@ function setupIPC () {
     spawnUpdateBridge()  // 先啟動橋接視窗，Electron 退出後仍顯示「正在更新」
     autoUpdater.quitAndInstall(true, true)
   })
-  ipcMain.on('win-set-theme', (_, theme) => {
-    if (!mainWindow || typeof mainWindow.setTitleBarOverlay !== 'function') return
-    if (theme === 'dark') {
-      mainWindow.setTitleBarOverlay({ color: '#0f0f1a', symbolColor: '#e5e7eb', height: 38 })
-    } else {
-      mainWindow.setTitleBarOverlay({ color: '#f0f0f0', symbolColor: '#555555', height: 38 })
-    }
-  })
-
   // ── Token 持久化（safeStorage）──
   const tokenFilePath = () => path.join(app.getPath('userData'), 'token.enc')
 

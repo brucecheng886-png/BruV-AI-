@@ -1,7 +1,5 @@
 <template>
   <div class="login-page">
-    <!-- Electron 拖動區：titleBarStyle=hidden 時需手動指定 -->
-    <div class="login-drag-bar" />
     <!-- 左側：品牌視覺 -->
     <div class="brand-pane">
       <svg class="bg-lines" viewBox="0 0 600 800" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid slice">
@@ -107,7 +105,7 @@
 </template>
 
 <script setup>
-import { reactive, ref, onMounted, onUnmounted } from 'vue'
+import { reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { Eye, EyeOff } from 'lucide-vue-next'
 import { useAuthStore } from '../stores/auth.js'
@@ -119,14 +117,6 @@ const form = reactive({ email: '', password: '', remember: false })
 const showPassword = ref(false)
 const loading = ref(false)
 const error   = ref('')
-
-// 登入頁為深色背景，將 titleBarOverlay 切換成深色，離開時還原
-onMounted(() => {
-  window.electronApp?.setTheme?.('dark')
-})
-onUnmounted(() => {
-  window.electronApp?.setTheme?.('light')
-})
 
 async function handleLogin () {
   error.value = ''
@@ -143,16 +133,6 @@ async function handleLogin () {
 </script>
 
 <style scoped>
-.login-drag-bar {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 38px;
-  -webkit-app-region: drag;
-  z-index: 9999;
-}
-
 .login-page {
   display: flex;
   width: 100%;

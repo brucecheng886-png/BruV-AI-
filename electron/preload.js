@@ -8,7 +8,6 @@ contextBridge.exposeInMainWorld('electronApp', {
   minimize:     () => ipcRenderer.send('win-minimize'),
   maximize:     () => ipcRenderer.send('win-maximize'),
   quit:         () => ipcRenderer.send('win-quit'),
-  setTheme:     (theme) => ipcRenderer.send('win-set-theme', theme),
   onUpdateAvailable:  (cb) => ipcRenderer.on('update-available',  (_, info) => cb(info)),
   onUpdateDownloaded: (cb) => ipcRenderer.on('update-downloaded', (_, info) => cb(info)),
 })
