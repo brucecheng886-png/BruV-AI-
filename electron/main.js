@@ -1176,7 +1176,22 @@ function setupSetupIPC (setupCompleteFile) {
       await runUp()
       return { success: true }
     } catch (err) {
-      return { success: false, error: String(err?.message ?? err).slice(0, 1500) }
+      const msg = String(err?.message ?? err)
+      // postgres 首次初始化在慢速機器上可能短暫崩潰後重啟，導致 celery 依賴失敗
+      // 等 30 秒讓 postgres 完全就緒後自動重試一次
+      if (/dependency failed to start|is unhealthy/i.test(msg)) {
+        if (!event.sender.isDestroyed()) {
+          event.sender.send('setup:dockerLog', '資料庫啟動中，30 秒後自動重試...')
+        }
+        await new Promise((resolve) => setTimeout(resolve, 30000))
+        try {
+          await runUp()
+          return { success: true }
+        } catch (retryErr) {
+          return { success: false, error: String(retryErr?.message ?? retryErr).slice(0, 1500) }
+        }
+      }
+      return { success: false, error: msg.slice(0, 1500) }
     }
   })
 
