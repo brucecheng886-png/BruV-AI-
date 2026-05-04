@@ -69,6 +69,18 @@ async def lifespan(app: FastAPI):
                     "up": "你是知識庫助理。你可以幫助使用者：\n- 搜尋知識庫文件\n- 回答知識庫相關問題\n- 協助整理和分類文件\n\n回答時請簡潔明確，優先使用繁體中文。",
                 },
             ),
+            # Fix: Anthropic models 不支援 embedding API，若被錯誤標記為 embedding 改回 chat
+            (
+                "UPDATE llm_models SET model_type = 'chat' "
+                "WHERE provider = 'anthropic' AND model_type = 'embedding'",
+                {},
+            ),
+            # Fix: 若有 KB 以 anthropic provider 作為 embedding provider，重設為 ollama fallback
+            (
+                "UPDATE knowledge_bases SET embedding_provider = 'ollama', embedding_model = NULL "
+                "WHERE embedding_provider = 'anthropic'",
+                {},
+            ),
         ]
         for sql, params in seeds:
             try:

@@ -21,6 +21,8 @@
             </el-dropdown-menu>
           </template>
         </el-dropdown>
+        <!-- 直接刷新按鈕 -->
+        <button class="titlebar-reload-btn" title="重新整理 (F5)" @click="call('reload')">⟳</button>
       </div>
     </div>
     <!-- 右側空白區域（Windows titleBarOverlay 原生按鈕佔據此空間，寬度約 138px） -->
@@ -81,6 +83,28 @@ function call(method) {
 }
 
 .menu-trigger:hover {
+  background: #ddd;
+  color: #111;
+}
+
+.titlebar-reload-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 28px;
+  width: 28px;
+  margin-left: 4px;
+  font-size: 16px;
+  line-height: 1;
+  color: #555;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+  transition: background 0.12s, color 0.12s;
+}
+.titlebar-reload-btn:hover {
   background: #ddd;
   color: #111;
 }

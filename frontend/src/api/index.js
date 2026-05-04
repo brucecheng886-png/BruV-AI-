@@ -300,6 +300,12 @@ export const systemSettingsApi = {
       body: JSON.stringify({ model: modelName }),
     })
   },
+  // 取得 Ollama 已安裝模型列表
+  getInstalledOllamaModels: () =>
+    apiFetch('/api/settings/ollama/installed', { headers: getHeaders(false) }).then(handleResponse),
+  // 刪除 Ollama 模型
+  deleteOllamaModel: (modelName) =>
+    apiFetch('/api/settings/ollama/delete', { method: 'DELETE', headers: getHeaders(), body: JSON.stringify({ model: modelName }) }).then(handleResponse),
 }
 
 // ── Auth API（個人資料 / 修改密碼 / 取得當前使用者）──────────────

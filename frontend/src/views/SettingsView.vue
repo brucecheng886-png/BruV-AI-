@@ -582,9 +582,15 @@
         <el-form-item label="模型類型">
           <el-select v-model="modelForm.model_type" style="width:220px;">
             <el-option value="chat"      label="Chat（對話）" />
-            <el-option value="embedding" label="Embedding（嵌入）" />
-            <el-option value="rerank"    label="Re-rank（重排）" />
+            <el-option value="embedding" label="Embedding（嵌入）"
+              :disabled="!PROVIDER_DEFS.find(p => p.key === modelForm.provider)?.types?.includes('embedding')" />
+            <el-option value="rerank" label="Re-rank（重排）"
+              :disabled="!PROVIDER_DEFS.find(p => p.key === modelForm.provider)?.types?.includes('rerank')" />
           </el-select>
+          <div v-if="modelForm.provider && PROVIDER_DEFS.find(p => p.key === modelForm.provider)?.types?.length === 1"
+            style="font-size:11px;color:#999;margin-top:3px;">
+            此 Provider 僅支援 Chat 類型
+          </div>
         </el-form-item>
         <el-form-item label="模型名稱" required>
           <!-- 有預設清單的 provider：顯示可篩選下拉（仍可自訂輸入） -->
@@ -679,6 +685,12 @@
       @closed="onHubClosed"
       class="model-hub-dialog"
     >
+      <!-- Import bar -->
+      <div class="hub-import-bar">
+        <button class="hub-import-btn" @click="$event.preventDefault()">＋ 匯入 GGUF 檔案</button>
+        <button class="hub-import-btn" @click="$event.preventDefault()">↗ 從 Ollama 名稱匯入</button>
+      </div>
+
       <!-- Tab 切換 -->
       <div class="hub-tabs">
         <button class="hub-tab" :class="{ active: hubTab === 'local' }" @click="hubTab = 'local'">
@@ -691,43 +703,72 @@
 
       <!-- 地端 tab -->
       <div v-if="hubTab === 'local'" class="hub-body">
+        <div v-if="installedLoading" style="text-align:center;padding:20px;color:#94a3b8;font-size:13px;">
+          載入已安裝清單…
+        </div>
         <div v-for="group in OLLAMA_CATALOG" :key="group.family" class="hub-family">
-          <div class="hub-family-title">{{ group.family }}</div>
+          <div class="hub-family-title">
+            <span class="hub-family-icon">{{ group.icon }}</span>{{ group.family }}
+          </div>
           <div class="hub-card-grid">
             <div
               v-for="item in group.items"
               :key="item.name"
               class="hub-card"
-              :class="{ 'hub-card--done': getPullState(item.name).status === 'done' }"
+              :class="{ 'hub-card--active': isInstalled(item.name) && getPullState(item.name).status !== 'pulling' }"
             >
+              <!-- Top row: icon + name + size + Active badge -->
               <div class="hub-card-top">
-                <div class="hub-card-name">{{ item.name }}</div>
-                <span class="hub-card-size">{{ item.size }}</span>
+                <div class="hub-card-icon-box">{{ group.icon }}</div>
+                <div class="hub-card-info">
+                  <div class="hub-card-name-row">
+                    <span class="hub-card-name">{{ item.name }}</span>
+                    <span class="hub-card-size">{{ item.size }}</span>
+                    <span v-if="isInstalled(item.name) && getPullState(item.name).status !== 'pulling'" class="hub-active-badge">Active</span>
+                  </div>
+                </div>
               </div>
               <div class="hub-card-desc">{{ item.desc }}</div>
               <div class="hub-card-tags">
-                <span v-for="t in item.tags" :key="t" class="hub-tag" :class="'hub-tag--' + t">{{ t }}</span>
+                <span
+                  v-for="t in item.tags" :key="t"
+                  class="hub-tag"
+                  :class="hubTagClass(t)"
+                >{{ t }}</span>
               </div>
               <div class="hub-card-footer">
-                <template v-if="getPullState(item.name).status === 'idle'">
+                <!-- 未安裝 & 閒置 -->
+                <template v-if="!isInstalled(item.name) && getPullState(item.name).status === 'idle'">
                   <el-button size="small" type="primary" plain @click="startHubPull(item.name)">下載</el-button>
                 </template>
+                <!-- 下載中 -->
                 <template v-else-if="getPullState(item.name).status === 'pulling'">
-                  <el-progress
-                    :percentage="getPullState(item.name).percent"
-                    :striped="true" :striped-flow="true" :duration="5"
-                    style="width:100%;margin-bottom:4px;"
-                  />
-                  <div class="hub-prog-text">{{ getPullState(item.name).text }}</div>
+                  <div style="width:100%">
+                    <div class="hub-progress-bar-wrap">
+                      <div class="hub-progress-bar-fill" :style="{ width: getPullState(item.name).percent + '%' }"></div>
+                    </div>
+                    <div class="hub-prog-text">{{ getPullState(item.name).text }}</div>
+                  </div>
                 </template>
-                <template v-else-if="getPullState(item.name).status === 'done'">
-                  <span class="hub-done-label">✓ 已下載</span>
+                <!-- 已安裝 -->
+                <template v-else-if="isInstalled(item.name)">
+                  <el-button
+                    size="small"
+                    class="hub-uninstall-btn"
+                    :loading="deletingModel === item.name"
+                    @click="deleteOllamaModel(item.name)"
+                  >移除</el-button>
                 </template>
+                <!-- 下載失敗 -->
                 <template v-else-if="getPullState(item.name).status === 'error'">
                   <el-tooltip :content="getPullState(item.name).text" placement="top">
                     <span class="hub-error-label">下載失敗</span>
                   </el-tooltip>
                   <el-button size="small" plain style="margin-left:6px;" @click="startHubPull(item.name)">重試</el-button>
+                </template>
+                <!-- 重新下載（done 但按下載時顯示） -->
+                <template v-else>
+                  <el-button size="small" type="primary" plain @click="startHubPull(item.name)">下載</el-button>
                 </template>
               </div>
             </div>
@@ -763,7 +804,7 @@
                   <div class="hub-card-name">{{ m.label }}</div>
                 </div>
                 <div class="hub-card-tags">
-                  <span class="hub-tag hub-tag--chat">chat</span>
+                  <span class="hub-tag hub-tag--純文字">純文字</span>
                 </div>
                 <div class="hub-card-footer">
                   <el-button size="small" type="primary" plain @click="addCloudModel(prov.key, m.value)">新增</el-button>
@@ -930,7 +971,7 @@ const models = ref([])
 const loading = ref(false)
 const searchQ = ref('')
 const PROVIDER_DEFS = [
-  { key: 'ollama',     name: 'Ollama',     logo: 'https://ollama.com/public/ollama.png',                                                                                     types: ['chat', 'embedding'] },
+  { key: 'ollama',     name: 'Ollama',     logo: 'https://ollama.com/public/ollama.png',                                                                                     types: ['chat', 'embedding', 'rerank'] },
   { key: 'openai',     name: 'OpenAI',     logo: 'https://upload.wikimedia.org/wikipedia/commons/0/04/ChatGPT_logo.svg',                                                       types: ['chat', 'embedding'] },
   { key: 'groq',       name: 'Groq',       logo: 'https://groq.com/wp-content/uploads/2024/03/groq-logo.png',                                                                  types: ['chat'] },
   { key: 'gemini',     name: 'Gemini',     logo: 'https://www.gstatic.com/lamda/images/gemini_sparkle_v002_d4735304ff6292a690345.svg',                                          types: ['chat'] },
@@ -1027,45 +1068,45 @@ const MODEL_PRESETS = {
 }
 
 const OLLAMA_CATALOG = [
-  { family: 'Qwen 2.5', items: [
-    { name: 'qwen2.5:7b',        size: '4.7 GB', desc: '通用對話，適合日常任務',        tags: ['chat'] },
-    { name: 'qwen2.5:14b',       size: '9.0 GB', desc: '強化推理，平衡速度與能力',      tags: ['chat'] },
-    { name: 'qwen2.5:32b',       size: '20 GB',  desc: '大型模型，接近前沿水準',         tags: ['chat'] },
-    { name: 'qwen2.5:72b',       size: '47 GB',  desc: '最強 Qwen，需 48GB+ VRAM',              tags: ['chat'] },
-    { name: 'qwen2.5-coder:7b',  size: '4.7 GB', desc: '程式碼生成與補全',              tags: ['chat', 'code'] },
-    { name: 'qwen2.5-coder:14b', size: '9.0 GB', desc: '進階程式碼助理',                  tags: ['chat', 'code'] },
+  { family: 'Qwen 2.5', icon: '🌐', items: [
+    { name: 'qwen2.5:7b',        size: '4.7 GB', desc: '通用對話，適合日常任務',        tags: ['純文字'] },
+    { name: 'qwen2.5:14b',       size: '9.0 GB', desc: '強化推理，平衡速度與能力',      tags: ['純文字'] },
+    { name: 'qwen2.5:32b',       size: '20 GB',  desc: '大型模型，接近前沿水準',        tags: ['純文字'] },
+    { name: 'qwen2.5:72b',       size: '47 GB',  desc: '最強 Qwen，需 48GB+ VRAM',      tags: ['純文字'] },
+    { name: 'qwen2.5-coder:7b',  size: '4.7 GB', desc: '程式碼生成與補全',              tags: ['純文字', '程式碼'] },
+    { name: 'qwen2.5-coder:14b', size: '9.0 GB', desc: '進階程式碼助理',                tags: ['純文字', '程式碼'] },
   ]},
-  { family: 'Llama 3', items: [
-    { name: 'llama3.2:1b',  size: '1.3 GB', desc: '超輕量，適合邊緣裝置',             tags: ['chat'] },
-    { name: 'llama3.2:3b',  size: '2.0 GB', desc: '輕量快速，日常對話',                tags: ['chat'] },
-    { name: 'llama3.1:8b',  size: '4.9 GB', desc: '主流選擇，速度與品質均衡',     tags: ['chat'] },
-    { name: 'llama3.1:70b', size: '43 GB',  desc: '高效能大型模型',                   tags: ['chat'] },
+  { family: 'Llama 3', icon: '🦙', items: [
+    { name: 'llama3.2:1b',  size: '1.3 GB', desc: '超輕量，適合邊緣裝置',         tags: ['純文字'] },
+    { name: 'llama3.2:3b',  size: '2.0 GB', desc: '輕量快速，日常對話',            tags: ['純文字'] },
+    { name: 'llama3.1:8b',  size: '4.9 GB', desc: '主流選擇，速度與品質均衡',     tags: ['純文字'] },
+    { name: 'llama3.1:70b', size: '43 GB',  desc: '高效能大型模型',               tags: ['純文字'] },
   ]},
-  { family: 'Gemma 3', items: [
-    { name: 'gemma3:4b',  size: '3.3 GB', desc: 'Google 輕量多模態模型',   tags: ['chat', 'vision'] },
-    { name: 'gemma3:12b', size: '8.1 GB', desc: 'Google 中型多模態模型',   tags: ['chat', 'vision'] },
-    { name: 'gemma3:27b', size: '17 GB',  desc: 'Google 大型多模態模型',   tags: ['chat', 'vision'] },
+  { family: 'Gemma 3', icon: '🔵', items: [
+    { name: 'gemma3:4b',  size: '3.3 GB', desc: 'Google 輕量多模態模型',   tags: ['多模態'] },
+    { name: 'gemma3:12b', size: '8.1 GB', desc: 'Google 中型多模態模型',   tags: ['多模態'] },
+    { name: 'gemma3:27b', size: '17 GB',  desc: 'Google 大型多模態模型',   tags: ['多模態'] },
   ]},
-  { family: 'DeepSeek R1', items: [
-    { name: 'deepseek-r1:7b',  size: '4.7 GB', desc: '推理強化模型，適合分析任務', tags: ['chat'] },
-    { name: 'deepseek-r1:14b', size: '9.0 GB', desc: '進階推理，支援 Chain-of-Thought',   tags: ['chat'] },
+  { family: 'DeepSeek R1', icon: '🧠', items: [
+    { name: 'deepseek-r1:7b',  size: '4.7 GB', desc: '推理強化模型，適合分析任務',       tags: ['純文字', '思考鏈'] },
+    { name: 'deepseek-r1:14b', size: '9.0 GB', desc: '進階推理，支援 Chain-of-Thought',  tags: ['純文字', '思考鏈'] },
   ]},
-  { family: 'Phi 4', items: [
-    { name: 'phi4:14b', size: '9.1 GB', desc: 'Microsoft 高效小型模型', tags: ['chat'] },
+  { family: 'Phi 4', icon: '🔬', items: [
+    { name: 'phi4:14b', size: '9.1 GB', desc: 'Microsoft 高效小型模型', tags: ['純文字'] },
   ]},
-  { family: 'Mistral', items: [
-    { name: 'mistral:7b',    size: '4.1 GB', desc: '歐洲頂尖開源模型',   tags: ['chat'] },
-    { name: 'mixtral:8x7b', size: '26 GB',  desc: 'MoE 架構，具備高速推理', tags: ['chat'] },
+  { family: 'Mistral', icon: '🌪', items: [
+    { name: 'mistral:7b',    size: '4.1 GB', desc: '歐洲頂尖開源模型',       tags: ['純文字'] },
+    { name: 'mixtral:8x7b', size: '26 GB',  desc: 'MoE 架構，具備高速推理', tags: ['純文字'] },
   ]},
-  { family: 'Vision', items: [
-    { name: 'llava:7b',        size: '4.7 GB', desc: '支援圖片輸入的多模態模型',     tags: ['chat', 'vision'] },
-    { name: 'llava-llama3:8b', size: '5.5 GB', desc: 'LLaVA + Llama3 基底多模態模型', tags: ['chat', 'vision'] },
+  { family: 'Vision', icon: '👁', items: [
+    { name: 'llava:7b',        size: '4.7 GB', desc: '支援圖片輸入的多模態模型',       tags: ['多模態'] },
+    { name: 'llava-llama3:8b', size: '5.5 GB', desc: 'LLaVA + Llama3 基底多模態模型', tags: ['多模態'] },
   ]},
-  { family: 'Embedding', items: [
-    { name: 'nomic-embed-text',  size: '274 MB', desc: '通用文字嵌入模型',              tags: ['embedding'] },
-    { name: 'mxbai-embed-large', size: '670 MB', desc: '高品質大型嵌入模型',            tags: ['embedding'] },
-    { name: 'bge-m3',            size: '1.2 GB', desc: '多語言嵌入，支援中文',          tags: ['embedding'] },
-    { name: 'all-minilm',        size: '46 MB',  desc: '超輕量句子嵌入',                    tags: ['embedding'] },
+  { family: 'Embedding', icon: '🔷', items: [
+    { name: 'nomic-embed-text',  size: '274 MB', desc: '通用文字嵌入模型',     tags: ['嵌入'] },
+    { name: 'mxbai-embed-large', size: '670 MB', desc: '高品質大型嵌入模型',   tags: ['嵌入'] },
+    { name: 'bge-m3',            size: '1.2 GB', desc: '多語言嵌入，支援中文', tags: ['嵌入'] },
+    { name: 'all-minilm',        size: '46 MB',  desc: '超輕量句子嵌入',       tags: ['嵌入'] },
   ]},
 ]
 
@@ -1262,15 +1303,56 @@ async function loadModels() {
 const showModelHub = ref(false)
 const hubTab       = ref('local')
 const hubPullState = reactive({}) // { [modelName]: { status, percent, text } }
+const installedModels = ref(new Set())
+const installedLoading = ref(false)
+const deletingModel = ref('')
 
 function getPullState(name) {
   if (!hubPullState[name]) hubPullState[name] = { status: 'idle', percent: 0, text: '' }
   return hubPullState[name]
 }
 
-function openModelHub() {
+function isInstalled(name) {
+  return installedModels.value.has(name)
+}
+
+async function loadInstalledModels() {
+  installedLoading.value = true
+  try {
+    const data = await systemSettingsApi.getInstalledOllamaModels()
+    installedModels.value = new Set(data.models || [])
+  } catch {
+    installedModels.value = new Set()
+  } finally {
+    installedLoading.value = false
+  }
+}
+
+async function deleteOllamaModel(name) {
+  try {
+    await ElMessageBox.confirm(`確定移除模型「${name}」？此操作無法復原。`, '移除模型', {
+      confirmButtonText: '移除',
+      cancelButtonText: '取消',
+      type: 'warning',
+      confirmButtonClass: 'el-button--danger',
+    })
+  } catch { return }
+  deletingModel.value = name
+  try {
+    await systemSettingsApi.deleteOllamaModel(name)
+    installedModels.value = new Set([...installedModels.value].filter(m => m !== name))
+    ElMessage.success(`已移除模型 ${name}`)
+  } catch (e) {
+    ElMessage.error(`移除失敗：${e.message || e}`)
+  } finally {
+    deletingModel.value = ''
+  }
+}
+
+async function openModelHub() {
   hubTab.value = 'local'
   showModelHub.value = true
+  await loadInstalledModels()
 }
 
 function onHubClosed() {
@@ -1318,6 +1400,7 @@ async function startHubPull(modelName) {
           state.status = 'done'
           state.percent = 100
           state.text = '下載完成！'
+          installedModels.value = new Set([...installedModels.value, modelName])
           ElMessage.success(`模型 ${modelName} 下載完成`)
           return
         }
@@ -1343,6 +1426,7 @@ async function startHubPull(modelName) {
       state.status = 'done'
       state.percent = 100
       state.text = '下載完成！'
+      installedModels.value = new Set([...installedModels.value, modelName])
       ElMessage.success(`模型 ${modelName} 下載完成`)
     }
   } catch (e) {
@@ -1355,6 +1439,11 @@ function addCloudModel(provider, name) {
   showModelHub.value = false
   openNewDialogForProvider(provider)
   modelForm.name = name
+}
+
+function hubTagClass(tag) {
+  const map = { '純文字': 'hub-tag--text', '多模態': 'hub-tag--multimodal', '嵌入': 'hub-tag--embedding', '程式碼': 'hub-tag--code', '思考鏈': 'hub-tag--thinking' }
+  return map[tag] || 'hub-tag--text'
 }
 
 
@@ -1419,6 +1508,11 @@ const verifyMsg    = ref('')
 function onProviderChange(val) {
   if (val === 'ollama' && !modelForm.base_url) modelForm.base_url = 'http://ollama:11434'
   modelForm.name = ''   // 切換 provider 時清空，讓使用者從新清單選擇
+  // 若切換後的 provider 不支援目前的 model_type，自動重設為 chat
+  const provDef = PROVIDER_DEFS.find(p => p.key === val)
+  if (provDef && !provDef.types.includes(modelForm.model_type)) {
+    modelForm.model_type = 'chat'
+  }
   verifyStatus.value = ''
   verifyMsg.value = ''
 }
@@ -2094,6 +2188,29 @@ async function changePassword() {
 .skill-actions { display: flex; justify-content: flex-end; margin-top: 4px; }
 
 /* ── Model Hub ───────────────────────────────────────── */
+.hub-import-bar {
+  display: flex;
+  gap: 8px;
+  padding: 0 0 14px;
+}
+.hub-import-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 14px;
+  border-radius: 6px;
+  border: 1.5px dashed #cbd5e1;
+  font-size: 12px;
+  color: #64748b;
+  background: transparent;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+.hub-import-btn:hover {
+  border-color: #3b82f6;
+  color: #3b82f6;
+  background: #eff6ff;
+}
 .hub-tabs {
   display: inline-flex;
   background: #f0f2f5;
@@ -2131,48 +2248,70 @@ async function changePassword() {
 }
 .hub-family-title {
   font-size: 13px;
-  font-weight: 600;
-  color: #475569;
+  font-weight: 700;
+  color: #334155;
   margin-bottom: 10px;
   padding-bottom: 6px;
   border-bottom: 1px solid #f0f2f5;
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
+.hub-family-icon { font-size: 14px; }
 .hub-card-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
   gap: 10px;
 }
 .hub-card {
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  padding: 12px;
+  border: 1.5px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 12px 12px 10px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 7px;
   background: #fff;
   transition: border-color 0.15s, box-shadow 0.15s;
 }
 .hub-card:hover {
   border-color: #cbd5e1;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.07);
 }
-.hub-card--done {
-  border-color: #86efac;
-  background: #f0fdf4;
+.hub-card--active {
+  border-color: #3b82f6;
+  background: #eff6ff;
 }
 .hub-card--cloud {
   background: #fafbff;
 }
+/* card top */
 .hub-card-top {
   display: flex;
   align-items: flex-start;
-  justify-content: space-between;
-  gap: 6px;
+  gap: 8px;
+}
+.hub-card-icon-box {
+  width: 30px;
+  height: 30px;
+  border-radius: 7px;
+  background: #f1f5f9;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  flex-shrink: 0;
+}
+.hub-card-info { flex: 1; min-width: 0; }
+.hub-card-name-row {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  flex-wrap: wrap;
 }
 .hub-card-name {
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
-  color: #1e293b;
+  color: #0f172a;
   word-break: break-all;
   line-height: 1.4;
 }
@@ -2183,6 +2322,17 @@ async function changePassword() {
   background: #f1f5f9;
   padding: 1px 6px;
   border-radius: 4px;
+  flex-shrink: 0;
+}
+.hub-active-badge {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .3px;
+  text-transform: uppercase;
+  background: #3b82f6;
+  color: #fff;
+  padding: 1px 7px;
+  border-radius: 20px;
   flex-shrink: 0;
 }
 .hub-card-desc {
@@ -2198,31 +2348,62 @@ async function changePassword() {
 }
 .hub-tag {
   font-size: 11px;
-  padding: 1px 6px;
-  border-radius: 4px;
+  padding: 2px 7px;
+  border-radius: 20px;
   font-weight: 500;
 }
-.hub-tag--chat      { background: #dbeafe; color: #1d4ed8; }
-.hub-tag--code      { background: #fef9c3; color: #a16207; }
-.hub-tag--vision    { background: #fce7f3; color: #9d174d; }
-.hub-tag--embedding { background: #dcfce7; color: #15803d; }
+.hub-tag--text       { background: #dbeafe; color: #1d4ed8; }
+.hub-tag--純文字     { background: #dbeafe; color: #1d4ed8; }
+.hub-tag--multimodal { background: #fce7f3; color: #9d174d; }
+.hub-tag--多模態     { background: #fce7f3; color: #9d174d; }
+.hub-tag--code       { background: #fef9c3; color: #a16207; }
+.hub-tag--程式碼     { background: #fef9c3; color: #a16207; }
+.hub-tag--embedding  { background: #dcfce7; color: #15803d; }
+.hub-tag--嵌入       { background: #dcfce7; color: #15803d; }
+.hub-tag--thinking   { background: #ede9fe; color: #6d28d9; }
+.hub-tag--思考鏈     { background: #ede9fe; color: #6d28d9; }
 .hub-card-footer {
-  margin-top: 4px;
+  margin-top: 2px;
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 4px;
 }
+/* 細線進度條 */
+.hub-progress-bar-wrap {
+  width: 100%;
+  height: 5px;
+  background: #e2e8f0;
+  border-radius: 3px;
+  overflow: hidden;
+  margin-bottom: 4px;
+}
+.hub-progress-bar-fill {
+  height: 100%;
+  background: #3b82f6;
+  border-radius: 3px;
+  background-image: repeating-linear-gradient(
+    45deg, transparent, transparent 5px, rgba(255,255,255,.3) 5px, rgba(255,255,255,.3) 10px
+  );
+  animation: hub-flow 0.8s linear infinite;
+  transition: width 0.3s;
+}
+@keyframes hub-flow { from { background-position: 0 0; } to { background-position: 20px 0; } }
 .hub-prog-text {
   font-size: 11px;
   color: #94a3b8;
   word-break: break-all;
   width: 100%;
 }
-.hub-done-label {
-  font-size: 12px;
-  font-weight: 600;
-  color: #16a34a;
+/* Uninstall 按鈕 */
+.hub-uninstall-btn {
+  border-color: #e2e8f0 !important;
+  color: #64748b !important;
+}
+.hub-uninstall-btn:hover {
+  border-color: #fca5a5 !important;
+  color: #dc2626 !important;
+  background: #fff0f0 !important;
 }
 .hub-error-label {
   font-size: 12px;

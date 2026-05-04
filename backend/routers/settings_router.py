@@ -846,6 +846,51 @@ class OllamaPullBody(BaseModel):
     model: str
 
 
+class OllamaDeleteBody(BaseModel):
+    model: str
+
+
+@router.get("/ollama/installed")
+async def get_installed_ollama_models(
+    current_user: CurrentAdmin = None,
+):
+    """回傳目前 Ollama 已安裝的模型名稱列表。"""
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            resp = await client.get(f"{app_settings.OLLAMA_BASE_URL}/api/tags")
+        if resp.status_code == 200:
+            names = [m["name"] for m in resp.json().get("models", [])]
+            return {"models": names}
+    except Exception as e:
+        logger.warning("get_installed_ollama_models failed: %s", e)
+    return {"models": []}
+
+
+@router.delete("/ollama/delete")
+async def delete_ollama_model(
+    body: OllamaDeleteBody,
+    current_user: CurrentAdmin = None,
+):
+    """刪除 Ollama 已安裝的模型。"""
+    model_name = body.model.strip()
+    if not model_name or '..' in model_name or not re.match(r'^[\w./:@-]+$', model_name):
+        raise HTTPException(status_code=400, detail="無效的模型名稱")
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.delete(
+                f"{app_settings.OLLAMA_BASE_URL}/api/delete",
+                json={"name": model_name},
+            )
+        if resp.status_code not in (200, 204):
+            raise HTTPException(status_code=502, detail=f"Ollama 回傳 {resp.status_code}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("delete_ollama_model failed: %s", e)
+        raise HTTPException(status_code=502, detail=str(e))
+    return {"ok": True}
+
+
 @router.post("/ollama/pull")
 async def pull_ollama_model(
     body: OllamaPullBody,
@@ -853,7 +898,7 @@ async def pull_ollama_model(
 ):
     """透過 Ollama 下載模型，以 SSE 串流回傳進度。"""
     model_name = body.model.strip()
-    if not model_name or not re.match(r'^[\w./:@-]+$', model_name):
+    if not model_name or '..' in model_name or not re.match(r'^[\w./:@-]+$', model_name):
         raise HTTPException(status_code=400, detail="無效的模型名稱")
 
     async def event_stream():
