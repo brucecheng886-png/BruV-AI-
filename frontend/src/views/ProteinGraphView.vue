@@ -84,6 +84,12 @@
           <el-icon><Refresh /></el-icon> 重新整理
         </el-button>
         <span class="pg-hint">節點大小 = 連結度；Z 軸高度 = 加權度；邊顏色 = 評分深淺；點擊節點開啟 GeneCards</span>
+        <div v-if="nodeCount > 0" style="margin-left:auto;display:flex;align-items:center;gap:6px;flex-shrink:0;">
+          <span style="font-size:11px;color:#64748b;">匯出：</span>
+          <el-button size="small" @click="exportPng" title="下載 3D 圖譜 PNG（含座標軸）">🖼 PNG</el-button>
+          <el-button size="small" @click="exportCyjs" title="Cytoscape Desktop 可直接開啟">Cytoscape</el-button>
+          <el-button size="small" @click="exportCsv" title="邊列表 CSV（蛋白質對 + 評分）">CSV</el-button>
+        </div>
       </div>
 
       <!-- 3D force graph 容器 -->
@@ -133,6 +139,7 @@ import { ref, computed, onMounted, onActivated, onUnmounted, nextTick, watch } f
 import { ElMessage } from 'element-plus'
 import { UploadFilled, Refresh } from '@element-plus/icons-vue'
 import ForceGraph3D from '3d-force-graph'
+import * as THREE from 'three'
 import { proteinApi } from '../api/index.js'
 
 // ── 狀態 ──────────────────────────────────────────────────────
@@ -158,6 +165,7 @@ const pendingFiles = ref([])
 const uploadRef    = ref(null)
 const container3d  = ref(null)
 let   graph3d      = null
+const graphData    = ref({ nodes: [], links: [] })
 
 // ── 上傳 ──────────────────────────────────────────────────────
 function onFileChange(file, fileList) {
@@ -211,6 +219,7 @@ async function loadGraph() {
     nodeCount.value = data.nodes?.length || 0
     edgeCount.value = data.links?.length || 0
     allEdges.value  = data.links || []
+    graphData.value = { nodes: data.nodes || [], links: data.links || [] }
     await nextTick()
     _initGraph(data)
   } catch (e) {
@@ -363,6 +372,147 @@ function _initGraph(data) {
     .onNodeClick(node => {
       if (node.url) window.open(node.url, '_blank', 'noopener')
     })
+    .onEngineStop(() => _addAxes(graph3d, maxWD))
+}
+
+// ── 建立文字標籤 Sprite ──────────────────────────────────
+function _makeTextSprite(text, hexColor) {
+  const canvas = document.createElement('canvas')
+  canvas.width = 320; canvas.height = 72
+  const ctx = canvas.getContext('2d')
+  ctx.font = 'bold 32px monospace'
+  ctx.fillStyle = hexColor
+  ctx.fillText(text, 6, 50)
+  const tex = new THREE.CanvasTexture(canvas)
+  const mat = new THREE.SpriteMaterial({ map: tex, depthWrite: false, transparent: true })
+  const sprite = new THREE.Sprite(mat)
+  sprite.scale.set(60, 14, 1)
+  return sprite
+}
+
+// ── 在場景中迷加 XYZ 軸 ────────────────────────────────
+function _addAxes(g, maxWD) {
+  if (!g) return
+  const scene = g.scene()
+  // 移除舊軸組
+  const old = scene.getObjectByName('protein-axes')
+  if (old) scene.remove(old)
+
+  const group = new THREE.Group()
+  group.name = 'protein-axes'
+
+  const L = 160   // 軸長
+  const axesDef = [
+    { dir: new THREE.Vector3(1, 0, 0), color: '#e74c3c', label: 'X  互作佈局' },
+    { dir: new THREE.Vector3(0, 1, 0), color: '#2ecc71', label: 'Y  互作佈局' },
+    { dir: new THREE.Vector3(0, 0, 1), color: '#3498db', label: `Z  加權度 (max=${maxWD.toFixed(1)})` },
+  ]
+
+  axesDef.forEach(({ dir, color, label }) => {
+    const hex = parseInt(color.slice(1), 16)
+    // 實線箔頭
+    const arrow = new THREE.ArrowHelper(dir, new THREE.Vector3(0, 0, 0), L, hex, 16, 8)
+    group.add(arrow)
+    // 文字標籤
+    const sprite = _makeTextSprite(label, color)
+    sprite.position.copy(dir.clone().multiplyScalar(L + 32))
+    group.add(sprite)
+    // 負方向虛線
+    const pts = [new THREE.Vector3(0,0,0), dir.clone().multiplyScalar(-L * 0.4)]
+    const geom = new THREE.BufferGeometry().setFromPoints(pts)
+    const mat  = new THREE.LineDashedMaterial({ color: hex, dashSize: 6, gapSize: 4, opacity: 0.35, transparent: true })
+    const line = new THREE.Line(geom, mat)
+    line.computeLineDistances()
+    group.add(line)
+  })
+
+  // 原點小球
+  const originGeo = new THREE.SphereGeometry(4, 12, 12)
+  const originMat = new THREE.MeshBasicMaterial({ color: 0xffffff })
+  group.add(new THREE.Mesh(originGeo, originMat))
+
+  scene.add(group)
+}
+
+// ── 匯出功能 ─────────────────────────────────────────────────
+function _triggerDownload(blob, filename) {
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url; a.download = filename; a.click()
+  URL.revokeObjectURL(url)
+}
+
+function exportPng() {
+  if (!graph3d) return
+  try {
+    const renderer = graph3d.renderer()
+    renderer.render(graph3d.scene(), graph3d.camera())
+    renderer.domElement.toBlob(blob => {
+      if (blob) _triggerDownload(blob, `protein_${selectedNetwork.value}_${new Date().toISOString().slice(0, 10)}.png`)
+    })
+  } catch (e) {
+    ElMessage.error('PNG 匯出失敗：' + e.message)
+  }
+}
+
+function exportCyjs() {
+  const { nodes, links } = graphData.value
+  if (!nodes.length) { ElMessage.warning('尚無圖譜資料'); return }
+  const cyNodes = nodes.map(n => ({
+    data: { id: n.id, label: n.name, degree: n.val, weighted_degree: n.weighted_degree, url: n.url }
+  }))
+  const cyEdges = links.map((l, i) => ({
+    data: {
+      id: `e${i}`,
+      source: typeof l.source === 'object' ? l.source.id : l.source,
+      target: typeof l.target === 'object' ? l.target.id : l.target,
+      weight: l.value
+    }
+  }))
+  const cyjs = {
+    format_version: '1.0',
+    generated_by: 'BruV AI Protein Graph',
+    target_cytoscapejs_version: '~2.1',
+    data: { name: selectedNetwork.value },
+    elements: { nodes: cyNodes, edges: cyEdges },
+    style: [
+      {
+        selector: 'node',
+        css: {
+          content: 'data(label)',
+          'text-valign': 'center',
+          width: 'mapData(degree, 1, 50, 20, 80)',
+          height: 'mapData(degree, 1, 50, 20, 80)',
+          'background-color': '#3498db',
+          color: '#ffffff',
+          'font-size': 10
+        }
+      },
+      {
+        selector: 'edge',
+        css: {
+          width: 'mapData(weight, 0, 1, 1, 6)',
+          'line-color': 'mapData(weight, 0, 1, #aaaaff, #ff4444)',
+          opacity: 0.7
+        }
+      }
+    ]
+  }
+  const blob = new Blob([JSON.stringify(cyjs, null, 2)], { type: 'application/json' })
+  _triggerDownload(blob, `protein_${selectedNetwork.value}.cyjs`)
+}
+
+function exportCsv() {
+  const { links } = graphData.value
+  if (!links.length) { ElMessage.warning('尚無邊資料'); return }
+  const header = 'protein_a,protein_b,score,network\n'
+  const rows = links.map(l => {
+    const a = typeof l.source === 'object' ? l.source.id : l.source
+    const b = typeof l.target === 'object' ? l.target.id : l.target
+    return `${a},${b},${Number(l.value).toFixed(4)},${selectedNetwork.value}`
+  }).join('\n')
+  const blob = new Blob([header + rows], { type: 'text/csv;charset=utf-8;' })
+  _triggerDownload(blob, `protein_${selectedNetwork.value}_edges.csv`)
 }
 
 // ── 高亮指定節點對 ────────────────────────────────────────────
@@ -388,6 +538,11 @@ function scoreColor(score) {
   if (score >= 0.6) return 'color:#e6a23c;font-weight:600'
   return 'color:#67c23a'
 }
+
+// ── 將目前選擇的 network 寫入 localStorage，供 AgentPanel 讀取 ───────────────
+watch(selectedNetwork, (val) => {
+  if (val) localStorage.setItem('protein_selected_network', val)
+})
 
 // ── resize 處理 ───────────────────────────────────────────────
 // 當 minScore 改變且統計面板開啟時，自動刷新

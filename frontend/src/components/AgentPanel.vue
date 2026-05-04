@@ -1,7 +1,7 @@
 <script setup>
 import { ref, reactive, computed, nextTick, onMounted, onUnmounted, watch, watchEffect } from 'vue'
 import { useRoute } from 'vue-router'
-import { chatStream, agentApi, kbApi, docsApi, conversationsApi, ontologyApi, pluginsApi, wikiApi } from '../api/index.js'
+import { chatStream, agentApi, kbApi, docsApi, conversationsApi, ontologyApi, pluginsApi, wikiApi, proteinApi } from '../api/index.js'
 import { useChatStore } from '../stores/chat.js'
 import { storeToRefs } from 'pinia'
 import { Monitor, Globe, BookOpen, X, ArrowUp, Square, Plus, Paperclip, FileSpreadsheet, Bot, MessageCircle, ListChecks, Clock, ChevronDown, Check, Copy } from 'lucide-vue-next'
@@ -337,6 +337,31 @@ async function buildPageContext() {
       }
       case 'chat':
         return `[頁面狀態] 目前在對話管理頁`
+      case 'protein': {
+        const network = localStorage.getItem('protein_selected_network') || ''
+        if (!network) return '[頁面狀態] 蛋白質圖譜（尚未選擇 Network）'
+        const [topRes, statsRes] = await Promise.allSettled([
+          proteinApi.top(network, 20),
+          proteinApi.stats(network, 0.4),
+        ])
+        const top = topRes.status === 'fulfilled' ? (topRes.value.interactions || []) : []
+        const stats = statsRes.status === 'fulfilled' ? statsRes.value : null
+        let ctx = `[頁面狀態] 蛋白質圖譜 — Network：${network}\n`
+        if (stats) {
+          ctx += `互作連結數（threshold≥0.4）：${stats.total_edges ?? '?'}\n`
+          ctx += `平均評分：${stats.mean_score != null ? Number(stats.mean_score).toFixed(3) : '?'}，最高評分：${stats.max_score != null ? Number(stats.max_score).toFixed(3) : '?'}，p90：${stats.p90 != null ? Number(stats.p90).toFixed(3) : '?'}\n`
+        }
+        if (top.length) {
+          // 從 top 互作推算出現頻率最高的 hub 蛋白
+          const freq = {}
+          top.forEach(r => { freq[r.protein_a] = (freq[r.protein_a] || 0) + 1; freq[r.protein_b] = (freq[r.protein_b] || 0) + 1 })
+          const hubs = Object.entries(freq).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([p, n]) => `${p}(${n}次)`)
+          ctx += `高頻 Hub 蛋白（在 TOP 20 中出現次數）：${hubs.join('、')}\n`
+          ctx += `\nTOP ${top.length} 高分互作對：\n`
+          top.forEach((r, i) => { ctx += `  ${i + 1}. ${r.protein_a} ↔ ${r.protein_b}  score=${Number(r.score).toFixed(3)}\n` })
+        }
+        return ctx.trimEnd()
+      }
       default:
         return ''
     }
