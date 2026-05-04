@@ -254,52 +254,62 @@ async def _anthropic_stream(
     }
 
     async with httpx.AsyncClient(timeout=300) as client:
-        async with client.stream(
-            "POST",
-            "https://api.anthropic.com/v1/messages",
-            headers=headers,
-            json=payload,
-        ) as resp:
-            if resp.status_code != 200:
-                body = await resp.aread()
-                logger.error("Anthropic error %s: %s", resp.status_code, body[:200])
-                yield f"[Anthropic 錯誤 {resp.status_code}]"
-                return
-            anthro_prompt_tokens = 0
-            anthro_completion_tokens = 0
-            async for line in resp.aiter_lines():
-                if not line.startswith("data:"):
-                    continue
-                data = line[5:].strip()
-                if not data:
-                    continue
-                try:
-                    chunk = json.loads(data)
-                except json.JSONDecodeError:
-                    continue
-                chunk_type = chunk.get("type", "")
-                if chunk_type == "message_start":
-                    _u = (chunk.get("message") or {}).get("usage") or {}
-                    anthro_prompt_tokens = int(_u.get("input_tokens") or 0)
-                    anthro_completion_tokens = int(_u.get("output_tokens") or 0)
-                elif chunk_type == "content_block_delta":
-                    token = chunk.get("delta", {}).get("text", "")
-                    if token:
-                        yield token
-                elif chunk_type == "message_delta":
-                    _u = chunk.get("usage") or {}
-                    if _u.get("output_tokens") is not None:
+        try:
+            async with client.stream(
+                "POST",
+                "https://api.anthropic.com/v1/messages",
+                headers=headers,
+                json=payload,
+            ) as resp:
+                if resp.status_code != 200:
+                    body = await resp.aread()
+                    logger.error("Anthropic error %s: %s", resp.status_code, body[:200])
+                    yield f"[Anthropic 錯誤 {resp.status_code}]"
+                    return
+                anthro_prompt_tokens = 0
+                anthro_completion_tokens = 0
+                async for line in resp.aiter_lines():
+                    if not line.startswith("data:"):
+                        continue
+                    data = line[5:].strip()
+                    if not data:
+                        continue
+                    try:
+                        chunk = json.loads(data)
+                    except json.JSONDecodeError:
+                        continue
+                    chunk_type = chunk.get("type", "")
+                    if chunk_type == "message_start":
+                        _u = (chunk.get("message") or {}).get("usage") or {}
+                        anthro_prompt_tokens = int(_u.get("input_tokens") or 0)
                         anthro_completion_tokens = int(_u.get("output_tokens") or 0)
-                elif chunk_type == "message_stop":
-                    break
-            if usage_callback:
-                try:
-                    usage_callback({
-                        "prompt_tokens": anthro_prompt_tokens,
-                        "completion_tokens": anthro_completion_tokens,
-                    })
-                except Exception as _e:
-                    logger.debug("anthropic usage_callback failed: %s", _e)
+                    elif chunk_type == "content_block_delta":
+                        token = chunk.get("delta", {}).get("text", "")
+                        if token:
+                            yield token
+                    elif chunk_type == "message_delta":
+                        _u = chunk.get("usage") or {}
+                        if _u.get("output_tokens") is not None:
+                            anthro_completion_tokens = int(_u.get("output_tokens") or 0)
+                    elif chunk_type == "message_stop":
+                        break
+                if usage_callback:
+                    try:
+                        usage_callback({
+                            "prompt_tokens": anthro_prompt_tokens,
+                            "completion_tokens": anthro_completion_tokens,
+                        })
+                    except Exception as _e:
+                        logger.debug("anthropic usage_callback failed: %s", _e)
+        except httpx.ConnectError as _ce:
+            logger.error("Anthropic ConnectError: %s", _ce)
+            yield "[錯誤：無法連線到 Anthropic API，請確認網路或 API Key]"
+        except httpx.TimeoutException as _te:
+            logger.error("Anthropic TimeoutException: %s", _te)
+            yield "[錯誤：Anthropic API 連線逾時，請稍後重試]"
+        except httpx.HTTPError as _he:
+            logger.error("Anthropic HTTPError: %s", _he)
+            yield f"[錯誤：Anthropic API 連線失敗 ({type(_he).__name__})]"
 
 
 # ── 非串流單次呼叫 ────────────────────────────────────────────────────────────

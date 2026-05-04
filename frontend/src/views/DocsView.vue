@@ -822,8 +822,15 @@
                 <div v-if="panelDoc.file_type === 'xlsx' || panelDoc.file_type === 'csv'" class="section-block">
                   <div class="section-title section-title--toggle" @click="toggleSheetExpand">
                     <span>試算表預覽</span>
-                    <ChevronDown :size="15" :stroke-width="1.5"
-                      :style="{ transform: sheetExpanded ? 'rotate(180deg)' : 'rotate(0)', transition: 'transform .2s' }" />
+                    <div style="display:flex;align-items:center;gap:6px;">
+                      <el-tooltip content="下載原始檔案（用 Excel 開啟）" placement="top" :show-after="300">
+                        <el-button link size="small" :loading="downloadingXlsx" style="padding:2px 4px;" @click.stop="downloadXlsx">
+                          <Download :size="14" :stroke-width="1.5" />
+                        </el-button>
+                      </el-tooltip>
+                      <ChevronDown :size="15" :stroke-width="1.5"
+                        :style="{ transform: sheetExpanded ? 'rotate(180deg)' : 'rotate(0)', transition: 'transform .2s' }" />
+                    </div>
                   </div>
                   <div v-show="sheetExpanded" class="ov-sheet-body">
                     <div v-if="sheetLoading" class="loading-center" style="height:80px;">
@@ -1254,7 +1261,7 @@ import {
   Upload, Link, LayoutGrid, List, Share2, Trash2, Search, Plus, Tag,
   CheckSquare, X, Settings2, Check, MoreHorizontal, FolderInput, RefreshCw,
   Eye, Loader2, FileText, FileSpreadsheet, Globe, ChevronRight, ChevronDown,
-  Database, FileStack, Copy, Zap, SendHorizontal, Sparkles
+  Database, FileStack, Copy, Zap, SendHorizontal, Sparkles, Download
 } from 'lucide-vue-next'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { docsApi, kbApi, tagsApi, wikiApi } from '../api/index.js'
@@ -1535,6 +1542,7 @@ const sheetExpanded = ref(false)
 
 // 試算表
 const sheetLoading = ref(false)
+const downloadingXlsx = ref(false)
 const sheetError = ref('')
 const sheetNames = ref([])
 const sheetHtml = ref({})
@@ -2609,6 +2617,33 @@ async function loadFullContent() {
   } finally {
     contentLoading.value = false
     contentLoaded.value = true
+  }
+}
+
+async function downloadXlsx() {
+  if (!panelDoc.value || downloadingXlsx.value) return
+  downloadingXlsx.value = true
+  try {
+    const arrayBuffer = await docsApi.download(panelDoc.value.doc_id)
+    const ext = panelDoc.value.file_type || 'xlsx'
+    const mimeMap = {
+      xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      csv: 'text/csv',
+    }
+    const mime = mimeMap[ext] || 'application/octet-stream'
+    const blob = new Blob([arrayBuffer], { type: mime })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = (panelDoc.value.title || `document.${ext}`).replace(/\.xlsx$/i, '') + `.${ext}`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+  } catch (e) {
+    ElMessage.error(e.message || '下載失敗')
+  } finally {
+    downloadingXlsx.value = false
   }
 }
 

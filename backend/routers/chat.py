@@ -496,13 +496,8 @@ async def _rag_stream(
         return
 
     if not search_result:
-        if file_context:
-            # 純附件問題，無需 RAG 知識庫結果，由 file_context 驅動 LLM
-            pass
-        else:
-            yield "data: " + json.dumps({"type": "error", "text": "知識庫中找不到相關資料。"}) + "\n\n"
-            yield "data: [DONE]\n\n"
-            return
+        # 無知識庫文件時繼續呼叫 LLM（fallback 模式：純對話 / Agent 操作仍可執行）
+        pass
 
     # 3. BGE Re-ranker（可動態關閉）
     passages = [hit.payload.get("content", "") for hit in search_result]
@@ -594,12 +589,12 @@ async def _rag_stream(
 
     system_prompt = (
         _agent_prefix
+        + (file_context_section.lstrip("\n") + "\n\n" if file_context_section else "")
         + RAG_SYSTEM_PROMPT
         + f"{schema_section}"
         f"{extra_section}"
         f"{_mode_suffix}"
-        f"{file_context_section}\n\n"
-        f"參考資料：\n{context}"
+        f"\n\n參考資料：\n{context}"
     )
 
     # Phase D：prompt_template_auto_match 開啟時，取最佳模板注入 system prompt 結尾
@@ -650,6 +645,10 @@ async def _rag_stream(
         recent_msgs = list(reversed(recent_result.scalars().all()))
     except Exception as _hist_err:
         logger.warning("history load failed: %s — starting fresh", _hist_err)
+        try:
+            await db.rollback()
+        except Exception:
+            pass
         total_msg_count = 0
         existing_summary = None
         recent_msgs = []
@@ -660,19 +659,23 @@ async def _rag_stream(
 
     # 5d. 超過門檻且尚無摘要時，對更舊的訊息做摘要
     if total_msg_count > SUMMARIZE_THRESHOLD and not existing_summary:
-        old_limit = total_msg_count - RECENT_ROUNDS * 2
-        if old_limit > 0:
-            old_result = await db.execute(
-                select(Message)
-                .where(Message.conv_id == conv_id)
-                .order_by(Message.created_at.asc())
-                .limit(old_limit)
-            )
-            old_msgs = old_result.scalars().all()
-            if old_msgs:
-                existing_summary = await _summarize_history(
-                    conv_id, list(old_msgs), settings, db
+        try:
+            old_limit = total_msg_count - RECENT_ROUNDS * 2
+            if old_limit > 0:
+                old_result = await db.execute(
+                    select(Message)
+                    .where(Message.conv_id == conv_id)
+                    .order_by(Message.created_at.asc())
+                    .limit(old_limit)
                 )
+                old_msgs = old_result.scalars().all()
+                if old_msgs:
+                    existing_summary = await _summarize_history(
+                        conv_id, list(old_msgs), settings, db
+                    )
+        except Exception as _sum_err:
+            logger.warning("summarize history failed: %s — skipping", _sum_err)
+            existing_summary = None
 
     # 5e. 組裝 messages_payload
     messages_payload = [{"role": "system", "content": system_prompt}]
@@ -687,15 +690,22 @@ async def _rag_stream(
 
     # 6. 儲存使用者訊息（重生成模式跳過，避免重覆）
     if not regenerated_from:
-        user_msg = Message(
-            id=str(uuid.uuid4()),
-            conv_id=conv_id,
-            role="user",
-            content=query,
-            sources=[],
-        )
-        db.add(user_msg)
-        await db.commit()
+        try:
+            user_msg = Message(
+                id=str(uuid.uuid4()),
+                conv_id=conv_id,
+                role="user",
+                content=query,
+                sources=[],
+            )
+            db.add(user_msg)
+            await db.commit()
+        except Exception as _save_user_err:
+            logger.warning("save user message failed: %s — continuing without save", _save_user_err)
+            try:
+                await db.rollback()
+            except Exception:
+                pass
 
     # 7. 串流 LLM（統一適配層：Ollama / OpenAI / Groq / Gemini / OpenRouter / Anthropic）
     from llm_client import llm_stream
@@ -809,22 +819,36 @@ async def _rag_stream(
                 if _resp_preview
                 else f"LLM 服務錯誤（{_eff_provider} HTTP {_status}）"
             )
-            db.add(Message(
-                id=str(uuid.uuid4()), conv_id=conv_id, role="assistant",
-                content=err_text, sources=[],
-            ))
-            await db.commit()
+            try:
+                db.add(Message(
+                    id=str(uuid.uuid4()), conv_id=conv_id, role="assistant",
+                    content=err_text, sources=[],
+                ))
+                await db.commit()
+            except Exception as _dbe:
+                logger.warning("save LLM error message failed: %s", _dbe)
+                try:
+                    await db.rollback()
+                except Exception:
+                    pass
             yield "data: " + json.dumps({"type": "error", "text": err_text}) + "\n\n"
             yield "data: [DONE]\n\n"
             return
         except Exception as e:
             logger.error("LLM unexpected error: %s", e)
             err_text = f"發生錯誤：{e}"
-            db.add(Message(
-                id=str(uuid.uuid4()), conv_id=conv_id, role="assistant",
-                content=err_text, sources=[],
-            ))
-            await db.commit()
+            try:
+                db.add(Message(
+                    id=str(uuid.uuid4()), conv_id=conv_id, role="assistant",
+                    content=err_text, sources=[],
+                ))
+                await db.commit()
+            except Exception as _dbe:
+                logger.warning("save LLM error message failed: %s", _dbe)
+                try:
+                    await db.rollback()
+                except Exception:
+                    pass
             yield "data: " + json.dumps({"type": "error", "text": str(e)}) + "\n\n"
             yield "data: [DONE]\n\n"
             return
@@ -1152,6 +1176,72 @@ async def chat_stream(
 _EXCEL_EXTENSIONS = {".xlsx", ".xls", ".csv"}
 _DOC_EXTENSIONS   = {".pdf", ".docx", ".txt", ".md"}
 
+
+def _excel_preview(file_bytes: bytes, filename: str, max_rows: int = 20) -> str:
+    """將 Excel/CSV 轉成輕量摘要字串注入 LLM context。
+    格式：欄位名稱 + 前 max_rows 行 Markdown 表格 + 總行數。
+    """
+    import io
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    try:
+        if ext == "csv":
+            import csv as _csv
+            text = file_bytes.decode("utf-8-sig", errors="replace")
+            reader = _csv.reader(io.StringIO(text))
+            rows = list(reader)
+            if not rows:
+                return f"（{filename} 為空檔案）"
+            headers = rows[0]
+            data_rows = rows[1:]
+            sheet_info = f"工作表：（CSV，共 {len(data_rows)} 行 × {len(headers)} 欄）\n"
+        else:
+            import openpyxl
+            wb = openpyxl.load_workbook(io.BytesIO(file_bytes), read_only=True, data_only=True)
+            sheet_summaries = []
+            for sheet_name in wb.sheetnames:
+                ws = wb[sheet_name]
+                all_rows = list(ws.iter_rows(values_only=True))
+                if not all_rows:
+                    continue
+                # 找第一個非全空的行作為 header
+                headers_raw = all_rows[0]
+                headers = [str(h) if h is not None else "" for h in headers_raw]
+                data_rows = all_rows[1:]
+                sheet_summaries.append((sheet_name, headers, data_rows))
+            wb.close()
+            if not sheet_summaries:
+                return f"（{filename} 無可讀資料）"
+            # 若只有一個 sheet，直接用；多 sheet 逐一附上
+            lines = []
+            for sheet_name, headers, data_rows in sheet_summaries:
+                lines.append(f"【工作表：{sheet_name}，共 {len(data_rows)} 行 × {len(headers)} 欄】")
+                lines.append(_rows_to_md(headers, data_rows[:max_rows]))
+                if len(data_rows) > max_rows:
+                    lines.append(f"…（僅顯示前 {max_rows} 行，實際共 {len(data_rows)} 行）")
+            return "\n".join(lines)
+        # CSV 路徑繼續
+        sheet_info_line = f"【{filename}，共 {len(data_rows)} 行 × {len(headers)} 欄】"
+        return sheet_info_line + "\n" + _rows_to_md(headers, data_rows[:max_rows]) + (
+            f"\n…（僅顯示前 {max_rows} 行，實際共 {len(data_rows)} 行）" if len(data_rows) > max_rows else ""
+        )
+    except Exception as e:
+        return f"（{filename} 解析失敗：{e}）"
+
+
+def _rows_to_md(headers: list, rows: list) -> str:
+    """轉成 Markdown 表格字串。"""
+    def _cell(v) -> str:
+        if v is None:
+            return ""
+        s = str(v).replace("|", "｜").replace("\n", " ")
+        return s[:80] + "…" if len(s) > 80 else s
+
+    header_line = "| " + " | ".join(_cell(h) for h in headers) + " |"
+    sep_line    = "| " + " | ".join("---" for _ in headers) + " |"
+    data_lines  = ["| " + " | ".join(_cell(row[i] if i < len(row) else None) for i in range(len(headers))) + " |"
+                   for row in rows]
+    return "\n".join([header_line, sep_line] + data_lines)
+
 @router.post("/stream-with-file")
 async def chat_stream_with_file(
     query: str = Form(""),
@@ -1192,9 +1282,17 @@ async def chat_stream_with_file(
         ext = os.path.splitext(file.filename)[1].lower()
         fname = file.filename
         if ext in _EXCEL_EXTENSIONS:
-            file_context = f"【使用者本次附上檔案：{fname}（Excel/CSV）】"
+            # 讀取原始 bytes 並解析成摘要注入
+            file_bytes = await file.read()
+            await file.seek(0)  # 重置供後續可能的二次讀取
+            preview = _excel_preview(file_bytes, fname, max_rows=20)
+            file_context = (
+                f"【使用者附上的 Excel/CSV 檔案：{fname}】\n"
+                f"{preview}"
+            )
             _file_priming = (
-                "在進行任何操作之前，請先確認使用者的意圖：是要匯入連結清單、進行資料分析、還是其他用途？\n"
+                "**重要：上方的 Excel 資料預覽已直接嵌入本對話 context，你已經看到了這份資料。**\n"
+                "請不要說「無法讀取附件」——資料就在上方，請直接根據使用者的問題分析它。\n"
                 "若使用者明確說要「匯入」或「匯入連結」，請在回應中加入以下 JSON 標記（獨立一行）：\n"
                 '{"__action__": "import_excel"}'
             )
