@@ -7,8 +7,8 @@ const crypto = require('crypto')
 const { exec, spawn } = require('child_process')
 const { autoUpdater } = require('electron-updater')
 
-autoUpdater.autoDownload = true
-autoUpdater.autoInstallOnAppQuit = true
+autoUpdater.autoDownload = false
+autoUpdater.autoInstallOnAppQuit = false
 
 const TARGET_URL = 'http://localhost:80'
 const BACKEND_HEALTH_URL = 'http://localhost:80/api/health'
@@ -646,6 +646,28 @@ function setupIPC () {
   ipcMain.on('relaunch-for-update', () => {
     try { fs.writeFileSync(path.join(app.getPath('appData'), 'bruv-ai-kb', 'auto-update.flag'), '1') } catch {}
     spawnUpdateBridge()  // 先啟動橋接視窗，Electron 退出後仍顯示「正在更新」
+    autoUpdater.quitAndInstall(true, true)
+  })
+  // ── 手動更新 IPC ──
+  ipcMain.handle('updater:check', async () => {
+    try {
+      const result = await autoUpdater.checkForUpdates()
+      return { hasUpdate: !!result?.updateInfo?.version && result.updateInfo.version !== app.getVersion(), version: result?.updateInfo?.version }
+    } catch (err) {
+      return { hasUpdate: false, error: err?.message || String(err) }
+    }
+  })
+  ipcMain.handle('updater:download', async () => {
+    try {
+      await autoUpdater.downloadUpdate()
+      return { ok: true }
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) }
+    }
+  })
+  ipcMain.on('updater:install', () => {
+    try { fs.writeFileSync(path.join(app.getPath('appData'), 'bruv-ai-kb', 'auto-update.flag'), '1') } catch {}
+    spawnUpdateBridge()
     autoUpdater.quitAndInstall(true, true)
   })
   // ── Token 持久化（safeStorage）──
@@ -1457,26 +1479,20 @@ function setupAutoUpdater () {
   })
   autoUpdater.on('update-not-available', () => {
     console.log('[autoUpdater] 已是最新版本')
+    mainWindow?.webContents.send('update-not-available')
   })
   autoUpdater.on('error', (err) => {
     console.error('[autoUpdater] 錯誤：', err?.message || err)
   })
   autoUpdater.on('download-progress', (p) => {
-    console.log(`[autoUpdater] 下載中 ${Math.round(p.percent)}%`)
+    const pct = Math.round(p.percent)
+    console.log(`[autoUpdater] 下載中 ${pct}%`)
+    mainWindow?.webContents.send('update-download-progress', { percent: pct, bytesPerSecond: p.bytesPerSecond, transferred: p.transferred, total: p.total })
   })
   autoUpdater.on('update-downloaded', async (info) => {
     mainWindow?.webContents.send('update-downloaded', { version: info.version })
-    // 由前端 banner 處理「立即重啟/稍後」，此處不再顯示 native dialog
+    // 由前端 Settings 頁觸發安裝，此處不再顯示 native dialog
   })
-
-  // 啟動 5 秒後檢查一次
-  setTimeout(() => {
-    autoUpdater.checkForUpdates().catch(() => {})
-  }, 5000)
-  // 之後每 4 小時檢查一次
-  setInterval(() => {
-    autoUpdater.checkForUpdates().catch(() => {})
-  }, 4 * 60 * 60 * 1000)
 }
 
 // 禁止導航到非 localhost 頁面（安全防護）

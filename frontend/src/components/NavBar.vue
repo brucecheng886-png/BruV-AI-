@@ -16,6 +16,10 @@
         {{ item.label }}
       </router-link>
     </nav>
+    <div v-if="appVersion" class="navbar-version" @click="goToUpdateSettings">
+      <span class="version-text">v{{ appVersion }}</span>
+      <span v-if="hasNewVersion" class="version-new-badge">NEW</span>
+    </div>
     <div class="navbar-footer" title="使用者設定" @click="goToUserSettings">
       <div class="footer-avatar">{{ authStore.userEmail ? authStore.userEmail[0].toUpperCase() : '?' }}</div>
       <div class="footer-info">
@@ -28,12 +32,24 @@
 </template>
 
 <script setup>
+import { ref, onMounted } from 'vue'
 import { useAuthStore } from '../stores/auth.js'
 import { useRouter } from 'vue-router'
 import { MessageSquare, FolderOpen, Network, Puzzle, Dna, Settings, LogOut } from 'lucide-vue-next'
 
 const authStore = useAuthStore()
 const router = useRouter()
+
+const appVersion = ref(window.electronApp?.version || '')
+const hasNewVersion = ref(false)
+
+onMounted(() => {
+  window.electronApp?.onUpdateAvailable?.(() => { hasNewVersion.value = true })
+})
+
+function goToUpdateSettings() {
+  router.push({ path: '/settings', query: { group: 'update' } })
+}
 
 const navItems = [
   { path: '/chat',     label: '對話',       icon: MessageSquare },
@@ -184,4 +200,37 @@ function goToUserSettings() {
   transition: color 0.15s;
 }
 .footer-logout:hover { color: #ef4444; }
+
+.navbar-version {
+  padding: 5px 14px 4px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  border-top: 1px solid #e2e8f0;
+}
+.navbar-version:hover .version-text { color: #1d4ed8; }
+
+.version-text {
+  font-size: 11px;
+  color: #94a3b8;
+  letter-spacing: 0.02em;
+  transition: color 0.15s;
+}
+
+.version-new-badge {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  background: #2563eb;
+  color: #fff;
+  padding: 1px 5px;
+  border-radius: 4px;
+  animation: badge-pulse 2s ease-in-out infinite;
+}
+
+@keyframes badge-pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.6; }
+}
 </style>

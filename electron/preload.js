@@ -8,8 +8,13 @@ contextBridge.exposeInMainWorld('electronApp', {
   minimize:     () => ipcRenderer.send('win-minimize'),
   maximize:     () => ipcRenderer.send('win-maximize'),
   quit:         () => ipcRenderer.send('win-quit'),
-  onUpdateAvailable:  (cb) => ipcRenderer.on('update-available',  (_, info) => cb(info)),
-  onUpdateDownloaded: (cb) => ipcRenderer.on('update-downloaded', (_, info) => cb(info)),
+  onUpdateAvailable:    (cb) => ipcRenderer.on('update-available',        (_, info) => cb(info)),
+  onUpdateDownloaded:   (cb) => ipcRenderer.on('update-downloaded',       (_, info) => cb(info)),
+  onUpdateNotAvailable: (cb) => ipcRenderer.on('update-not-available',    (_)       => cb()),
+  onDownloadProgress:   (cb) => ipcRenderer.on('update-download-progress',(_, info) => cb(info)),
+  checkForUpdate:  () => ipcRenderer.invoke('updater:check'),
+  downloadUpdate:  () => ipcRenderer.invoke('updater:download'),
+  installUpdate:   () => ipcRenderer.send('updater:install'),
 })
 
 // Token 持久化（safeStorage）

@@ -571,6 +571,82 @@
         </div>
       </template>
 
+      <!-- ── 關於 / 更新（Electron 專用）────────────────────────────── -->
+      <template v-if="activeGroup === 'update'">
+        <div class="settings-section">
+          <div class="section-header">
+            <Download :size="16" :stroke-width="1.5" class="section-icon" />
+            <span>關於 BruV AI</span>
+          </div>
+          <div class="section-body">
+            <div class="update-about-row">
+              <img src="/logo.svg" alt="logo" class="update-logo" />
+              <div class="update-about-info">
+                <div class="update-app-name">BruV AI 知識庫</div>
+                <div class="update-current-ver">目前版本：<strong>v{{ updateCurrentVer }}</strong></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-section">
+          <div class="section-header">
+            <Cloud :size="16" :stroke-width="1.5" class="section-icon" />
+            <span>版本更新</span>
+          </div>
+          <div class="section-body">
+            <!-- 狀態提示 -->
+            <div v-if="updateStatus === 'idle'" class="update-status-row">
+              <el-button type="primary" :loading="updateChecking" @click="doCheckUpdate">
+                檢查更新
+              </el-button>
+              <span class="update-hint">目前為手動更新模式，點擊按鈕檢查是否有新版本</span>
+            </div>
+
+            <div v-else-if="updateStatus === 'checking'" class="update-status-row">
+              <el-icon class="is-loading"><Refresh /></el-icon>
+              <span class="update-hint">正在檢查更新…</span>
+            </div>
+
+            <div v-else-if="updateStatus === 'up-to-date'" class="update-status-row">
+              <el-tag type="success" size="large">✔ 已是最新版本</el-tag>
+              <el-button style="margin-left:12px;" size="small" @click="doCheckUpdate">再次檢查</el-button>
+            </div>
+
+            <div v-else-if="updateStatus === 'available'" class="update-status-col">
+              <div class="update-new-version-row">
+                <el-tag type="warning" size="large">🎉 發現新版本 v{{ updateNewVer }}</el-tag>
+              </div>
+              <div class="update-actions">
+                <el-button type="primary" :loading="updateDownloading" @click="doDownloadUpdate">
+                  下載更新
+                </el-button>
+              </div>
+            </div>
+
+            <div v-else-if="updateStatus === 'downloading'" class="update-status-col">
+              <div class="update-progress-label">正在下載 v{{ updateNewVer }}… {{ updateDownloadPct }}%</div>
+              <el-progress :percentage="updateDownloadPct" status="striped" striped striped-flow :duration="5" style="width:320px;" />
+            </div>
+
+            <div v-else-if="updateStatus === 'downloaded'" class="update-status-col">
+              <el-tag type="success" size="large">✔ 下載完成，v{{ updateNewVer }} 已就緒</el-tag>
+              <div class="update-actions" style="margin-top:12px;">
+                <el-button type="danger" @click="doInstallUpdate">
+                  立即重啟並安裝
+                </el-button>
+                <span class="update-hint" style="margin-left:10px;">或下次關閉應用程式時自動安裝</span>
+              </div>
+            </div>
+
+            <div v-else-if="updateStatus === 'error'" class="update-status-row">
+              <el-alert :title="updateError" type="error" show-icon :closable="false" style="width:100%;" />
+              <el-button style="margin-left:12px;" size="small" @click="doCheckUpdate">重試</el-button>
+            </div>
+          </div>
+        </div>
+      </template>
+
     <!-- Add / Edit Dialog -->
     <el-dialog v-model="showAddDialog" :title="editingId ? '編輯模型' : '新增模型'" width="600px" @closed="onDialogClosed">
       <el-form :model="modelForm" label-width="110px">
@@ -951,6 +1027,7 @@ const GROUP_DEFS = computed(() => [
   { key: 'data',   label: '資料管理' },
   { key: 'system', label: '系統' },
   ...(authStore.userRole === 'admin' ? [{ key: 'email', label: '郵件通知' }] : []),
+  ...(isElectron ? [{ key: 'update', label: '關於 / 更新' }] : []),
 ])
 const activeGroup = ref('user')
 function onGroupChange(group) {
@@ -960,6 +1037,7 @@ function onGroupChange(group) {
   if (group === 'data')   { loadSchema(); loadBackupList() }
   if (group === 'system') { loadSkills(); loadClosePref() }
   if (group === 'email')  { loadSmtp() }
+  if (group === 'update') { updateCurrentVer.value = window.electronApp?.version || '' }
 }
 function _applyRouteGroup() {
   const g = route.query.group
@@ -1171,6 +1249,62 @@ const availableSkills = ref([])
 // ── Electron 關閉偏好 ──────────────────────────────────────────────
 const isElectron = typeof window !== 'undefined' && !!window.electronAPI?.getClosePreference
 const closePref = ref(null)
+
+// ── Electron 手動更新 ──────────────────────────────────────────────
+const updateCurrentVer = ref(window.electronApp?.version || '')
+const updateNewVer = ref('')
+const updateStatus = ref('idle')  // idle | checking | up-to-date | available | downloading | downloaded | error
+const updateChecking = ref(false)
+const updateDownloading = ref(false)
+const updateDownloadPct = ref(0)
+const updateError = ref('')
+
+async function doCheckUpdate () {
+  if (!window.electronApp?.checkForUpdate) return
+  updateStatus.value = 'checking'
+  updateChecking.value = true
+  updateError.value = ''
+  try {
+    const res = await window.electronApp.checkForUpdate()
+    if (res?.error) { updateStatus.value = 'error'; updateError.value = res.error; return }
+    if (res?.hasUpdate) {
+      updateNewVer.value = res.version || ''
+      updateStatus.value = 'available'
+    } else {
+      updateStatus.value = 'up-to-date'
+    }
+  } catch (e) {
+    updateStatus.value = 'error'
+    updateError.value = e?.message || String(e)
+  } finally {
+    updateChecking.value = false
+  }
+}
+
+async function doDownloadUpdate () {
+  if (!window.electronApp?.downloadUpdate) return
+  updateStatus.value = 'downloading'
+  updateDownloading.value = true
+  updateDownloadPct.value = 0
+  window.electronApp.onDownloadProgress?.((info) => {
+    updateDownloadPct.value = info.percent ?? 0
+  })
+  window.electronApp.onUpdateDownloaded?.(() => {
+    updateStatus.value = 'downloaded'
+    updateDownloading.value = false
+  })
+  try {
+    await window.electronApp.downloadUpdate()
+  } catch (e) {
+    updateStatus.value = 'error'
+    updateError.value = e?.message || String(e)
+    updateDownloading.value = false
+  }
+}
+
+function doInstallUpdate () {
+  window.electronApp?.installUpdate?.()
+}
 const resetPrefLoading = ref(false)
 async function loadClosePref () {
   if (!isElectron) return
@@ -2409,6 +2543,63 @@ async function changePassword() {
   font-size: 12px;
   color: #dc2626;
   cursor: help;
+}
+
+/* ── 關於 / 更新 ── */
+.update-about-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 8px 0;
+}
+.update-logo {
+  width: 48px;
+  height: 48px;
+  flex-shrink: 0;
+}
+.update-about-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.update-app-name {
+  font-size: 16px;
+  font-weight: 700;
+  color: #1e293b;
+}
+.update-current-ver {
+  font-size: 13px;
+  color: #64748b;
+}
+.update-status-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.update-status-col {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.update-new-version-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.update-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.update-progress-label {
+  font-size: 13px;
+  color: #475569;
+}
+.update-hint {
+  font-size: 12px;
+  color: #94a3b8;
 }
 </style>
 
