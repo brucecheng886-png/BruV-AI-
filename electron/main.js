@@ -461,6 +461,12 @@ function createMain () {
     minHeight: 600,
     show: false,
     title: 'BruV AI 知識庫',
+    titleBarStyle: 'hidden',
+    titleBarOverlay: {
+      color: '#1e293b',
+      symbolColor: '#94a3b8',
+      height: 38
+    },
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false,
@@ -814,6 +820,11 @@ function setupKeyboardShortcuts () {
     // Ctrl+R → 一般重載
     if (input.type === 'keyDown' && input.key === 'r' && input.control) {
       mainWindow.webContents.reload()
+      event.preventDefault()
+    }
+    // F12 → DevTools
+    if (input.type === 'keyDown' && input.key === 'F12') {
+      mainWindow.webContents.toggleDevTools()
       event.preventDefault()
     }
   })

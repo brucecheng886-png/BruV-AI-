@@ -645,13 +645,10 @@
         </div>
         <div style="display:flex; align-items:center; gap:8px;">
           <span class="model-tag pending" id="model-tag-bge">待下載</span>
+          <span style="font-size:11px; font-weight:600; color:#e55; background:#fff0f0; border:1px solid #f99; border-radius:4px; padding:2px 7px;">必要</span>
           <button class="btn btn-primary" id="btn-dl-bge"
             onclick="pullModel('bge-m3')" style="padding:6px 14px; font-size:12px">
             開始下載
-          </button>
-          <button class="btn btn-secondary" id="btn-skip-bge"
-            onclick="skipModel('bge-m3')" style="padding:6px 12px; font-size:12px">
-            稍後
           </button>
         </div>
       </div>
@@ -771,6 +768,13 @@
         <div class="sub" id="cstep-backend-sub">輪詢 /api/health</div>
       </div>
     </div>
+    <div class="cstep cstep-idle" id="cstep-embedding">
+      <div class="cstep-icon"></div>
+      <div class="cstep-text">
+        <div class="label">下載 AI Embedding 模型</div>
+        <div class="sub" id="cstep-embedding-sub">bge-m3（約 1.2GB）</div>
+      </div>
+    </div>
     <div class="cstep cstep-idle" id="cstep-open">
       <div class="cstep-icon"></div>
       <div class="cstep-text">
@@ -808,6 +812,26 @@
     <div class="prog-indet-wrap">
       <div class="prog-indet-label">正在等待後端服務就緒... 通常需要 10–30 秒</div>
       <div class="prog-indet"><div class="prog-indet-fill"></div></div>
+    </div>
+  </div>
+
+  <!-- bge-m3 Embedding 模型強制下載進度 -->
+  <div id="embedding-progress-area" style="display:none; width:100%">
+    <div class="prog-indet-wrap">
+      <div class="prog-indet-label" id="embedding-progress-label">正在下載 AI Embedding 模型，約 1.2GB，請稍候...</div>
+      <div class="prog-indet"><div class="prog-indet-fill"></div></div>
+    </div>
+    <div id="embedding-prog-detail" style="display:none; width:100%; margin-top:8px;">
+      <div class="pull-prog-bar-wrap">
+        <div class="pull-prog-bar">
+          <div class="pull-prog-fill" id="embedding-prog-fill" style="width:0%"></div>
+        </div>
+        <span class="pull-prog-pct" id="embedding-prog-pct">0%</span>
+      </div>
+      <div class="pull-prog-info">
+        <span id="embedding-prog-size">正在準備下載...</span>
+        <span id="embedding-prog-layers"></span>
+      </div>
     </div>
   </div>
 
@@ -1058,6 +1082,10 @@
           }
         } catch { /* 忽略偵測失敗，使用者仍可手動下載 */ }
         refreshModelNext()
+        // bge-m3 必要模型：若尚未安裝，自動觸發下載
+        if (modelState['bge-m3'].status !== 'done') {
+          pullModel('bge-m3')
+        }
       } else {
         if (progBar)    progBar.style.display    = 'none'
         if (recheckBtn) recheckBtn.disabled = false
@@ -1080,8 +1108,9 @@
     const id = modelId(modelName)
 
     // Disable buttons during download
-    document.getElementById(`btn-dl-${id}`).disabled  = true
-    document.getElementById(`btn-skip-${id}`).disabled = true
+    document.getElementById(`btn-dl-${id}`).disabled = true
+    const _skipBtnStart = document.getElementById(`btn-skip-${id}`)
+    if (_skipBtnStart) _skipBtnStart.disabled = true
     document.querySelectorAll('[id^="btn-dl-"]').forEach(b => b.disabled = true)
 
     modelState[modelName].status  = 'downloading'
@@ -1102,8 +1131,9 @@
       setModelTag(modelName, 'error')
       document.getElementById(`model-log-${id}`).textContent =
         result.error || '下載失敗，請稍後重試'
-      document.getElementById(`btn-dl-${id}`).disabled   = false
-      document.getElementById(`btn-skip-${id}`).disabled = false
+      document.getElementById(`btn-dl-${id}`).disabled = false
+      const _skipBtnErr = document.getElementById(`btn-skip-${id}`)
+      if (_skipBtnErr) _skipBtnErr.disabled = false
     }
 
     // Re-enable the other model's button
@@ -1111,8 +1141,9 @@
     const otherModel = id === 'qwen' ? 'bge-m3' : 'qwen2.5:14b'
     if (modelState[otherModel].status === 'pending' ||
         modelState[otherModel].status === 'error') {
-      document.getElementById(`btn-dl-${otherId}`).disabled   = false
-      document.getElementById(`btn-skip-${otherId}`).disabled = false
+      document.getElementById(`btn-dl-${otherId}`).disabled = false
+      const _skipBtnOther = document.getElementById(`btn-skip-${otherId}`)
+      if (_skipBtnOther) _skipBtnOther.disabled = false
     }
 
     refreshModelNext()
@@ -1132,7 +1163,7 @@
     const q = modelState['qwen2.5:14b'].status
     const b = modelState['bge-m3'].status
     const canNext = (q === 'done' || q === 'skipped') &&
-                    (b === 'done' || b === 'skipped')
+                    (b === 'done')
     document.getElementById('btn-model-next').disabled = !canNext
 
     const hasSkip = q === 'skipped' || b === 'skipped'
@@ -1343,6 +1374,15 @@
     document.getElementById('completion-desc').textContent = '正在為您啟動系統，請稍候...'
     document.getElementById('services-progress-area').style.display = 'none'
     document.getElementById('backend-progress-area').style.display  = 'none'
+    document.getElementById('embedding-progress-area').style.display = 'none'
+    const _epd = document.getElementById('embedding-prog-detail')
+    if (_epd) _epd.style.display = 'none'
+    const _epf = document.getElementById('embedding-prog-fill')
+    if (_epf) _epf.style.width = '0%'
+    const _eppc = document.getElementById('embedding-prog-pct')
+    if (_eppc) _eppc.textContent = '0%'
+    const _eps = document.getElementById('embedding-prog-size')
+    if (_eps) _eps.textContent = '正在準備下載...'
     pullLayers.clear()
     const _pp = document.getElementById('docker-pull-progress')
     if (_pp) _pp.style.display = 'none'
@@ -1356,6 +1396,7 @@
     if (_pl) _pl.textContent = '0 / 0 layers'
     setCstep('services', 'idle')
     setCstep('backend',  'idle')
+    setCstep('embedding','idle')
     setCstep('open',     'idle')
 
     // 1. Start services
@@ -1383,6 +1424,10 @@
     }
     setCstep('backend', 'done', '後端已就緒')
 
+    // 2.6 強制下載 bge-m3 Embedding 模型（必要，不可跳過）
+    const embResult = await pullEmbeddingModel()
+    if (!embResult.success) return
+
     // 2.5 初始化管理員帳號
     if (adminCreds.email && adminCreds.password) {
       const initResult = await window.setupBridge.initAdmin(
@@ -1404,6 +1449,63 @@
     setCstep('open', 'done', '即將顯示主視窗')
     document.getElementById('completion-desc').textContent = '設定完成！歡迎使用 BruV AI。'
   }
+
+  // ── Embedding Model Pull（強制，不可跳過）────────────────
+  async function pullEmbeddingModel () {
+    const MODEL = 'bge-m3:latest'
+
+    // 先檢查是否已安裝
+    setCstep('embedding', 'running', '正在檢查 Embedding 模型...')
+    try {
+      const listRes = await window.setupBridge.listOllamaModels()
+      const installed = listRes.success ? (listRes.models || []) : []
+      if (installed.some(m => m === MODEL || m.startsWith('bge-m3'))) {
+        setCstep('embedding', 'done', '模型已安裝，跳過下載')
+        return { success: true }
+      }
+    } catch { /* 無法取得清單，繼續嘗試 pull */ }
+
+    // 尚未安裝，強制 pull
+    setCstep('embedding', 'running', '正在下載 AI Embedding 模型，約 1.2GB，請稍候...')
+    const progArea = document.getElementById('embedding-progress-area')
+    const progLabel = document.getElementById('embedding-progress-label')
+    if (progArea) progArea.style.display = 'block'
+    if (progLabel) progLabel.textContent = '正在下載 AI Embedding 模型，約 1.2GB，請稍候...'
+
+    const result = await window.setupBridge.pullOllamaModel(MODEL)
+
+    if (progArea) progArea.style.display = 'none'
+
+    if (!result.success) {
+      setCstep('embedding', 'error', '下載失敗：' + (result.error || '未知錯誤'))
+      showCompletionError('AI Embedding 模型（bge-m3）下載失敗：' + (result.error || '請檢查網路後重試'))
+      return { success: false }
+    }
+
+    setCstep('embedding', 'done', 'bge-m3 下載完成')
+    return { success: true }
+  }
+
+  // bge-m3 Embedding pull 進度 listener（Step 6 專用）
+  window.setupBridge.onOllamaProgress(function (data) {
+    if (currentStep !== 6) return
+    if (!data.model || !data.model.startsWith('bge-m3')) return
+
+    const detailEl = document.getElementById('embedding-prog-detail')
+    if (detailEl && detailEl.style.display === 'none') detailEl.style.display = 'block'
+
+    if (data.percent !== null && data.percent !== undefined) {
+      const fillEl = document.getElementById('embedding-prog-fill')
+      const pctEl  = document.getElementById('embedding-prog-pct')
+      if (fillEl) fillEl.style.width = data.percent + '%'
+      if (pctEl)  pctEl.textContent  = data.percent + '%'
+    }
+    if (data.line) {
+      const sizeEl = document.getElementById('embedding-prog-size')
+      if (sizeEl) sizeEl.textContent = data.line.slice(0, 80)
+      setCstep('embedding', 'running', data.line.slice(0, 50))
+    }
+  })
 
   function showCompletionError (msg) {
     const banner = document.getElementById('completion-error-banner')
@@ -1429,6 +1531,10 @@
       return
     }
     setCstep('backend', 'done', '後端已就緒')
+
+    // 強制下載 bge-m3 Embedding 模型（必要，不可跳過）
+    const embRetryResult = await pullEmbeddingModel()
+    if (!embRetryResult.success) return
 
     if (adminCreds.email && adminCreds.password) {
       const initResult = await window.setupBridge.initAdmin(
