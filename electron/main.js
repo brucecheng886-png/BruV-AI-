@@ -461,22 +461,20 @@ function createMain () {
     minHeight: 600,
     show: false,
     title: 'BruV AI 知識庫',
-    titleBarStyle: 'hidden',
-    titleBarOverlay: {
-      color: '#1e293b',
-      symbolColor: '#94a3b8',
-      height: 38
-    },
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false,
       contextIsolation: true,
+      sandbox: false,
       // 允許 SSE / EventSource 對 localhost
       webSecurity: true
     }
   })
 
-  mainWindow.loadURL(TARGET_URL)
+  // 每次啟動清除 HTTP cache，確保載入最新前端 bundle
+  mainWindow.webContents.session.clearCache().then(() => {
+    mainWindow.loadURL(TARGET_URL)
+  })
 
   // 視窗準備好才顯示（避免白屏閃爍）
   mainWindow.once('ready-to-show', () => {

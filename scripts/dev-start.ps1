@@ -4,9 +4,10 @@
     BruV AI 開發模式啟動腳本
 .DESCRIPTION
     1. 確認 Docker Desktop 已就緒
-    2. docker compose up -d（含熱重載 volume）
-    3. 並行等待各服務健康檢查
-    4. 啟動 Electron（npm start）
+    2. (選項) Build 前端 → docker compose restart nginx
+    3. docker compose up -d
+    4. 等待各服務健康檢查
+    5. 啟動 Electron
 #>
 
 Set-StrictMode -Version Latest
@@ -35,7 +36,7 @@ Write-Host "  ║                                          ║" -ForegroundColor
 Write-Host "  ╚══════════════════════════════════════════╝" -ForegroundColor DarkMagenta
 Write-Host ""
 
-$TOTAL_STEPS = 4
+$TOTAL_STEPS = 5
 
 # ── Step 1：Docker Desktop ────────────────────────────────────────────────────
 Write-Step 1 $TOTAL_STEPS "檢查 Docker Desktop..."
@@ -79,8 +80,30 @@ if (-not $dockerReady) {
 
 Write-Ok "Docker 已就緒"
 
-# ── Step 2：docker compose up ─────────────────────────────────────────────────
-Write-Step 2 $TOTAL_STEPS "啟動 / 確認後端容器..."
+# ── Step 2：前端 Build（詢問）────────────────────────────────────────────────
+Write-Step 2 $TOTAL_STEPS "前端 Build..."
+Write-Host ""
+Write-Host "  是否重新 Build 前端？（前端有改動請選 Y）" -ForegroundColor White
+Write-Host "  [Y] 是    [Enter] 跳過（預設）" -ForegroundColor DarkGray
+Write-Host ""
+$buildChoice = Read-Host "  選擇"
+
+if ($buildChoice -match '^[Yy]$') {
+    Write-Info "使用 Docker (node:20-alpine) build，請稍候..."
+    docker run --rm -v "${ROOT}/frontend:/app" -w /app node:20-alpine `
+        sh -c "npm install --silent && npm run build 2>&1 | tail -3"
+    if ($LASTEXITCODE -ne 0) {
+        Write-Fail "前端 Build 失敗，請檢查錯誤訊息。"
+        Read-Host "按 Enter 結束"
+        exit 1
+    }
+    Write-Ok "前端 Build 完成"
+} else {
+    Write-Info "跳過 Build，使用現有 dist"
+}
+
+# ── Step 3：docker compose up ─────────────────────────────────────────────────
+Write-Step 3 $TOTAL_STEPS "啟動 / 確認後端容器..."
 
 $dcOutput = docker compose up -d --remove-orphans 2>&1
 $dcExit = $LASTEXITCODE
@@ -112,21 +135,17 @@ if ($dcExit -ne 0) {
     }
 }
 
-# 確保 nginx（port 80）正在跑，若停止則重新啟動
-$nginxRunning = docker ps --filter "name=bruv_ai_nginx" --filter "status=running" -q 2>$null
-if (-not $nginxRunning) {
-    Write-Warn "nginx 容器未運行，嘗試重新啟動..."
-    docker start bruv_ai_nginx 2>$null | Out-Null
-    Start-Sleep 1
-    $nginxRunning = docker ps --filter "name=bruv_ai_nginx" --filter "status=running" -q 2>$null
-    if ($nginxRunning) { Write-Ok "nginx 已重新啟動" }
-    else { Write-Warn "nginx 啟動失敗，Electron 可能卡在 splash 畫面" }
+# 若 build 了前端，重啟 nginx 確保 volume 內容最新（override.yml 已掛載 ./frontend/dist）
+if ($buildChoice -match '^[Yy]$') {
+    Write-Info "重啟 nginx 套用新 bundle..."
+    docker compose restart nginx 2>&1 | Out-Null
+    Write-Ok "nginx 已更新"
 }
 
 Write-Ok "所有容器已啟動"
 
-# ── Step 3：並行等待各服務健康檢查 ───────────────────────────────────────────
-Write-Step 3 $TOTAL_STEPS "等待各服務就緒..."
+# ── Step 4：並行等待各服務健康檢查 ───────────────────────────────────────────
+Write-Step 4 $TOTAL_STEPS "等待各服務就緒..."
 Write-Host ""
 
 $checks = @(
@@ -182,8 +201,8 @@ foreach ($check in $checks) {
 
 Write-Host ""
 
-# ── Step 4：啟動 Electron ─────────────────────────────────────────────────────
-Write-Step 4 $TOTAL_STEPS "啟動 Electron（開發模式，熱重載後端）..."
+# ── Step 5：啟動 Electron ─────────────────────────────────────────────────────
+Write-Step 5 $TOTAL_STEPS "啟動 Electron..."
 Write-Host ""
 
 $electronPath = Join-Path $ROOT "electron"

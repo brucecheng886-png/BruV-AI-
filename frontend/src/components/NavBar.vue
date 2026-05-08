@@ -3,6 +3,9 @@
     <div class="navbar-logo">
       <img src="/logo.svg" alt="logo" class="logo-img" />
       <span class="logo-text">BruV AI知識庫</span>
+      <button v-if="isElectron" class="navbar-reload-btn" title="重新整理 (F5)" @click="reloadApp">
+        <RefreshCw :size="14" :stroke-width="1.8" />
+      </button>
     </div>
     <nav class="navbar-nav">
       <router-link
@@ -35,13 +38,18 @@
 import { ref, onMounted } from 'vue'
 import { useAuthStore } from '../stores/auth.js'
 import { useRouter } from 'vue-router'
-import { MessageSquare, FolderOpen, Network, Puzzle, Dna, Settings, LogOut } from 'lucide-vue-next'
+import { MessageSquare, FolderOpen, Network, Puzzle, Dna, Settings, LogOut, RefreshCw } from 'lucide-vue-next'
 
 const authStore = useAuthStore()
 const router = useRouter()
 
 const appVersion = ref(window.electronApp?.version || '')
 const hasNewVersion = ref(false)
+const isElectron = navigator.userAgent.includes('Electron') || !!window.electronApp?.version
+
+function reloadApp () {
+  window.electronApp?.reload?.()
+}
 
 onMounted(() => {
   window.electronApp?.onUpdateAvailable?.(() => { hasNewVersion.value = true })
@@ -89,6 +97,26 @@ function goToUserSettings() {
   align-items: center;
   justify-content: flex-start;
   gap: 10px;
+}
+
+.navbar-reload-btn {
+  margin-left: auto;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: #94a3b8;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.navbar-reload-btn:hover {
+  background: #e2e8f0;
+  color: #1e293b;
 }
 
 .logo-img {

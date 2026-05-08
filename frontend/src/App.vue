@@ -19,7 +19,6 @@
       </template>
       <button class="update-banner-close" @click="updateInfo = null">✕</button>
     </div>
-    <TitleBar v-if="isElectron" />
     <div class="app-body" :style="{ '--agent-panel-w': (agentPanelOpen && showAgentPanel) ? '380px' : '0px' }">
       <NavBar />
       <main class="app-main" :class="{ 'agent-panel-open': agentPanelOpen && showAgentPanel }">
@@ -44,7 +43,6 @@ import { ref, computed, watch, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import NavBar from './components/NavBar.vue'
 import AgentPanel from './components/AgentPanel.vue'
-import TitleBar from './components/TitleBar.vue'
 import { useAuthStore } from './stores/auth.js'
 
 const authStore = useAuthStore()
@@ -71,7 +69,6 @@ function relaunchApp () {
 onMounted(() => {
   if (window.electronApp?.version) {
     document.documentElement.classList.add('electron-app')
-    document.documentElement.style.setProperty('--titlebar-h', '38px')
     window.electronApp.onUpdateAvailable?.((info) => {
       updateInfo.value = { ...info, ready: false }
     })

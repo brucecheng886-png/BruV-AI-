@@ -1,7 +1,8 @@
 const { contextBridge, ipcRenderer } = require('electron')
+const path = require('path')
 
 contextBridge.exposeInMainWorld('electronApp', {
-  version: require('./package.json').version,
+  version: require(path.join(__dirname, 'package.json')).version,
   reload:       () => ipcRenderer.send('win-reload'),
   forceReload:  () => ipcRenderer.send('win-force-reload'),
   toggleDevTools: () => ipcRenderer.send('win-devtools'),
