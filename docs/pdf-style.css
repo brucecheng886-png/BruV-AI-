@@ -1,0 +1,21 @@
+body {
+  font-family: "Microsoft JhengHei", "PingFang TC", Arial, sans-serif;
+  font-size: 13px;
+  line-height: 1.7;
+}
+h1, h2, h3, h4 {
+  page-break-after: avoid;
+  break-after: avoid;
+}
+h2 + p, h2 + ul, h2 + ol, h2 + table, h2 + blockquote,
+h3 + p, h3 + ul, h3 + ol, h3 + table, h3 + blockquote,
+h4 + p, h4 + ul, h4 + ol, h4 + table {
+  page-break-before: avoid;
+  break-before: avoid;
+}
+p, li { orphans: 3; widows: 3; }
+table { border-collapse: collapse; width: 100%; font-size: 12px; }
+th, td { border: 1px solid #ccc; padding: 5px 8px; }
+th { background: #f0f0f0; }
+blockquote { border-left: 4px solid #ccc; padding-left: 12px; color: #555; margin: 8px 0; }
+pre, code { font-size: 11px; }

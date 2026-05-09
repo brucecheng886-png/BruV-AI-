@@ -116,7 +116,8 @@ test.describe('整合測試三：帳號管理', () => {
     // 鎖定「個人資料」card
     const profileCard = page.locator('.el-card', { hasText: '個人資料' })
     await expect(profileCard).toBeVisible({ timeout: 10_000 })
-    const emailInput = profileCard.locator('input[type="email"]')
+    // email input 在 el-form-item label="帳號" 內，type=text（非 email）
+    const emailInput = profileCard.locator('.el-form-item').filter({ hasText: '帳號' }).locator('input').first()
     await expect(emailInput).toHaveValue(ADMIN_EMAIL, { timeout: 10_000 })
     const displayInput = profileCard.locator('input[placeholder="（選填）"]')
     await displayInput.fill(TEST_DISPLAY_NAME)

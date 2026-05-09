@@ -1,5 +1,28 @@
 # GitHub Copilot 工作指示
 
+---
+
+## ⚠️ 發布強制規則（最高優先級，不得例外）
+
+**當使用者說出下列任何詞語或動作時，AI 必須在執行任何其他步驟之前，先讀取並完整執行「發布前檢查」Skill：**
+
+觸發關鍵字（中英文皆算）：
+- 發布、上線、推版、release、publish
+- `git tag`、`push tag`、`git push ... v`
+- `gh release create`
+- `npm run dist`、`build:win`
+
+**強制流程：**
+1. 使用者說出觸發詞 → AI 必須先回答「我將先執行發布前檢查 Skill」
+2. 讀取 `.github/skills/發布前檢查/SKILL.md` 全文
+3. 依照 Skill 內容逐節執行，每節都要真實跑指令確認
+4. 第九節「發布清單」全部打勾後，才能執行 `git tag` 或 `gh release create`
+5. CI/CD 觸發後必須執行 `gh run list` 確認 workflow 成功
+
+**違反此規則 = 嚴重錯誤，等同於未測試就上線。**
+
+---
+
 ## 完成變更後的匯報格式
 
 每次做完程式修改後，**必須**用以下格式向使用者匯報，不得只列檔案名稱或技術術語：
