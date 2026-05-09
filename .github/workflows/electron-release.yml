@@ -5,6 +5,9 @@ on:
     tags:
       - 'v*'
 
+permissions:
+  contents: write
+
 jobs:
   build-frontend:
     name: Build Frontend (Linux Docker)
