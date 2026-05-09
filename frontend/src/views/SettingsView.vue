@@ -19,16 +19,24 @@
               <Cpu :size="16" :stroke-width="1.5" class="section-icon" />
               <span>模型管理</span>
             </span>
-            <el-button type="primary" size="small" @click="openNewDialog">新增模型</el-button>
+            <el-dropdown trigger="click" @command="onModelMenuCommand">
+              <el-button type="primary" size="small">
+                新增模型
+                <el-icon style="margin-left:4px;"><ArrowDown /></el-icon>
+              </el-button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item command="manual">手動輸入模型資訊</el-dropdown-item>
+                  <el-dropdown-item command="hub" divided>
+                    <Download :size="13" :stroke-width="1.5" style="margin-right:4px;vertical-align:middle" />從 Ollama 瀏覽下載
+                  </el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
           </div>
           <div class="section-body">
-            <!-- 地端模型 -->
-            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
-              <div class="model-group-title" style="margin-bottom:0;">地端模型</div>
-              <el-button size="small" @click="openModelHub">
-                <Download :size="13" :stroke-width="1.5" style="margin-right:4px;vertical-align:middle" />瀏覽模型
-              </el-button>
-            </div>
+            <!-- 地端 Chat 模型 -->
+            <div class="model-group-title">地端模型</div>
             <el-table :data="models.filter(m => m.provider === 'ollama')" v-loading="loading" stripe style="width:100%;" empty-text="尚無地端模型">
               <el-table-column label="名稱" prop="name" min-width="160" />
               <el-table-column label="類型" width="100" align="center">
@@ -79,6 +87,38 @@
                   <el-popconfirm title="刪除此模型？" @confirm="deleteModel(row.id)">
                     <template #reference>
                       <el-button size="small" type="danger" plain>刪</el-button>
+                    </template>
+                  </el-popconfirm>
+                </template>
+              </el-table-column>
+            </el-table>
+
+            <el-divider />
+
+            <!-- Embedding / Rerank 模型 -->
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+              <div class="model-group-title" style="margin-bottom:0;">Embedding 模型（Ollama 已安裝）</div>
+              <el-button size="small" :loading="embedLoading" @click="loadEmbedModels">重新整理</el-button>
+            </div>
+            <el-table :data="embedModels" v-loading="embedLoading" stripe style="width:100%;" empty-text="尚未安裝 Embedding 模型">
+              <el-table-column label="名稱" prop="name" min-width="200" />
+              <el-table-column label="用途" width="140" align="center">
+                <template #default="{ row }">
+                  <el-tag size="small" :type="row.isRerank ? 'warning' : 'success'">
+                    {{ row.isRerank ? 'rerank' : 'embedding' }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="狀態" width="90" align="center">
+                <template #default>
+                  <el-tag size="small" type="success">已安裝</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="操作" width="80" align="center">
+                <template #default="{ row }">
+                  <el-popconfirm :title="`移除「${row.name}」？`" @confirm="deleteOllamaModel(row.name)">
+                    <template #reference>
+                      <el-button size="small" type="danger" plain :loading="deletingModel === row.name">移除</el-button>
                     </template>
                   </el-popconfirm>
                 </template>
@@ -645,6 +685,38 @@
             </div>
           </div>
         </div>
+
+        <!-- ── 診斷與支援 ── -->
+        <div class="settings-section">
+          <div class="section-header">
+            <FileText :size="16" :stroke-width="1.5" class="section-icon" />
+            <span>診斷與支援</span>
+          </div>
+          <div class="section-body">
+            <div style="margin-bottom:10px;color:#666;font-size:13px;">
+              產生包含系統資訊、容器狀態及 Log 的診斷報告，可協助技術支援人員排查問題。
+            </div>
+            <div class="update-status-row">
+              <el-button
+                type="default"
+                :loading="diagGenerating"
+                :disabled="diagGenerating"
+                @click="doGenerateDiagnostic"
+              >
+                產生診斷報告
+              </el-button>
+              <span v-if="diagResultPath" class="update-hint" style="color:#67c23a;">
+                ✔ 已儲存至 {{ diagResultPath }}
+              </span>
+              <span v-if="diagError" class="update-hint" style="color:#f56c6c;">
+                ✘ {{ diagError }}
+              </span>
+            </div>
+            <div style="margin-top:8px;font-size:12px;color:#999;">
+              報告包含：App 版本、OS 資訊、Docker 容器狀態與 Log、設定檔（密碼已遮蔽）
+            </div>
+          </div>
+        </div>
       </template>
 
     <!-- Add / Edit Dialog -->
@@ -901,13 +973,15 @@
 <script setup>
 import { ref, onMounted, onActivated, reactive, defineComponent, computed } from 'vue'
 import { useRoute } from 'vue-router'
-import { Refresh, Check } from '@element-plus/icons-vue'
-import { Layers, FolderOpen, MessageSquare, Network, Puzzle, Settings, Dna, Cpu, Key, Sliders, HardDrive, Database, Bot, User, Link, BookOpen, Mail, Download, Cloud } from 'lucide-vue-next'
+import { Refresh, Check, ArrowDown } from '@element-plus/icons-vue'
+import { Layers, FolderOpen, MessageSquare, Network, Puzzle, Settings, Dna, Cpu, Key, Sliders, HardDrive, Database, Bot, User, Link, BookOpen, Mail, Download, Cloud, FileText } from 'lucide-vue-next'
 import { wikiApi, systemSettingsApi, agentSkillsApi, monitoringApi, authApi } from '../api/index.js'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuthStore } from '../stores/auth.js'
+import { useUpdateStore } from '../stores/update.js'
 
 const authStore = useAuthStore()
+const updateStore = useUpdateStore()
 const route = useRoute()
 const userEmail = computed(() => authStore.userEmail)
 const userRole  = computed(() => authStore.userRole)
@@ -1037,7 +1111,17 @@ function onGroupChange(group) {
   if (group === 'data')   { loadSchema(); loadBackupList() }
   if (group === 'system') { loadSkills(); loadClosePref() }
   if (group === 'email')  { loadSmtp() }
-  if (group === 'update') { updateCurrentVer.value = window.electronApp?.version || '' }
+  if (group === 'update') {
+    updateCurrentVer.value = window.electronApp?.version || ''
+    // 若背景偵測已發現新版，直接套用到 UI 狀態
+    if (updateStore.downloadReady && updateStore.newVersion) {
+      updateNewVer.value = updateStore.newVersion
+      updateStatus.value = 'downloaded'
+    } else if (updateStore.newVersion) {
+      updateNewVer.value = updateStore.newVersion
+      updateStatus.value = 'available'
+    }
+  }
 }
 function _applyRouteGroup() {
   const g = route.query.group
@@ -1227,6 +1311,12 @@ onMounted(async () => {
     await loadApiSettings()
     loadChatSettings()
     _applyRouteGroup()
+    // 監聽 auto-updater 錯誤，跳轉到 update 頁顯示
+    window.electronApp?.onUpdateError?.((msg) => {
+      updateStatus.value = 'error'
+      updateError.value = msg || '更新發生錯誤'
+      ElMessage.error('自動更新錯誤：' + (msg || '未知錯誤'))
+    })
   } finally {
     _settingsMounting = false
   }
@@ -1305,6 +1395,34 @@ async function doDownloadUpdate () {
 function doInstallUpdate () {
   window.electronApp?.installUpdate?.()
 }
+
+// ── 診斷報告 ──────────────────────────────────────────────────────────
+const diagGenerating = ref(false)
+const diagResultPath = ref('')
+const diagError = ref('')
+
+async function doGenerateDiagnostic () {
+  if (!window.electronApp?.generateDiagnostic) return
+  diagGenerating.value = true
+  diagResultPath.value = ''
+  diagError.value = ''
+  try {
+    const res = await window.electronApp.generateDiagnostic()
+    if (res?.ok) {
+      diagResultPath.value = res.path || res.fileName || '已儲存'
+      ElMessage.success('診斷報告已產生：' + (res.fileName || ''))
+    } else {
+      diagError.value = res?.error || '未知錯誤'
+      ElMessage.error('診斷報告產生失敗：' + diagError.value)
+    }
+  } catch (e) {
+    diagError.value = e?.message || String(e)
+    ElMessage.error('診斷報告產生失敗：' + diagError.value)
+  } finally {
+    diagGenerating.value = false
+  }
+}
+
 const resetPrefLoading = ref(false)
 async function loadClosePref () {
   if (!isElectron) return
@@ -1431,6 +1549,33 @@ async function loadModels() {
   } finally {
     loading.value = false
   }
+  // 同步載入 embedding 模型
+  loadEmbedModels()
+}
+
+// ── Embedding Models ──────────────────────────────────────────────────────────
+const EMBED_KEYWORDS = ['embed', 'bge', 'nomic', 'rerank', 'e5-']
+const embedModels = ref([])
+const embedLoading = ref(false)
+
+async function loadEmbedModels() {
+  embedLoading.value = true
+  try {
+    const data = await systemSettingsApi.getInstalledOllamaModels()
+    const names = data.models || []
+    embedModels.value = names
+      .filter(n => EMBED_KEYWORDS.some(k => n.toLowerCase().includes(k)))
+      .map(n => ({ name: n, isRerank: n.toLowerCase().includes('rerank') }))
+  } catch {
+    embedModels.value = []
+  } finally {
+    embedLoading.value = false
+  }
+}
+
+function onModelMenuCommand(cmd) {
+  if (cmd === 'manual') openNewDialog()
+  else if (cmd === 'hub') openModelHub()
 }
 
 // ── Model Hub ─────────────────────────────────────────────────────────────────

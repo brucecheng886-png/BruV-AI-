@@ -465,7 +465,9 @@
     即將引導您完成初始設定。整個流程大約需要 10–20 分鐘，<br>
     主要時間用於下載 AI 模型（約 10GB）。
   </div>
-  <div class="req-list">
+
+  <!-- 靜態需求清單（預設顯示） -->
+  <div class="req-list" id="req-static">
     <div class="req-item">
       <div class="req-dot"></div>
       <span><strong>Docker Desktop</strong> — 執行所有後台服務</span>
@@ -483,8 +485,25 @@
       <span><strong>Ollama</strong> — 執行地端 AI 語言模型（LLM）</span>
     </div>
   </div>
-  <div class="btn-row">
-    <button class="btn btn-primary" onclick="showStep(2)">開始設定</button>
+
+  <!-- 環境預檢結果（點擊「開始設定」後顯示） -->
+  <div id="env-check-area" style="display:none; width:100%; margin-top:12px;">
+    <div class="prog-indet-wrap" id="env-checking-prog">
+      <div class="prog-indet-label">正在檢測系統環境…</div>
+      <div class="prog-indet"><div class="prog-indet-fill"></div></div>
+    </div>
+    <div id="env-check-results" style="display:none; width:100%;"></div>
+    <div id="env-fail-msg" style="display:none; color:#ef5350; font-size:13px; margin-top:8px;">
+      ⚠ 系統不符合最低需求，無法繼續安裝。請解決上述問題後重新啟動。
+    </div>
+  </div>
+
+  <div class="btn-row" id="env-start-btn-row">
+    <button class="btn btn-primary" onclick="doEnvCheckAndProceed()">開始設定</button>
+  </div>
+  <div class="btn-row" id="env-proceed-btn-row" style="display:none;">
+    <button class="btn btn-primary" id="env-proceed-btn" onclick="showStep(2)">繼續</button>
+    <button class="btn btn-secondary" onclick="doEnvCheckAndProceed()" style="margin-left:8px;">重新檢測</button>
   </div>
 </div>
 
@@ -861,6 +880,63 @@
   const adminCreds = { email: '', password: '' }
 
   // ── Step Navigation ───────────────────────────────────────
+  // ── Step 1: 環境預檢 ────────────────────────────────────────────
+  async function doEnvCheckAndProceed () {
+    const staticList = document.getElementById('req-static')
+    const checkArea  = document.getElementById('env-check-area')
+    const checkingProg = document.getElementById('env-checking-prog')
+    const resultsDiv = document.getElementById('env-check-results')
+    const failMsg    = document.getElementById('env-fail-msg')
+    const startBtnRow   = document.getElementById('env-start-btn-row')
+    const proceedBtnRow = document.getElementById('env-proceed-btn-row')
+    const proceedBtn    = document.getElementById('env-proceed-btn')
+
+    staticList.style.display = 'none'
+    checkArea.style.display = 'block'
+    checkingProg.style.display = 'block'
+    resultsDiv.style.display = 'none'
+    failMsg.style.display = 'none'
+    startBtnRow.style.display = 'none'
+    proceedBtnRow.style.display = 'none'
+
+    let result
+    try {
+      result = await window.setupBridge.checkEnvironment()
+    } catch (e) {
+      // 若 IPC 失敗，允許直接繼續
+      checkingProg.style.display = 'none'
+      startBtnRow.style.display = 'none'
+      proceedBtnRow.style.display = 'flex'
+      return
+    }
+
+    checkingProg.style.display = 'none'
+    resultsDiv.style.display = 'block'
+
+    const statusIcon = { ok: '✔', warn: '⚠', fail: '✘' }
+    const statusColor = { ok: '#4caf50', warn: '#ff9800', fail: '#ef5350' }
+
+    resultsDiv.innerHTML = result.checks.map(c => `
+      <div style="display:flex;align-items:flex-start;gap:10px;margin-bottom:8px;padding:8px 10px;background:#f5f5f7;border-radius:6px;">
+        <span style="font-size:15px;color:${statusColor[c.status]};flex-shrink:0;min-width:18px;">${statusIcon[c.status]}</span>
+        <div>
+          <div style="font-weight:600;font-size:13px;">${c.label}</div>
+          <div style="font-size:12px;color:#666;">${c.detail}</div>
+        </div>
+      </div>
+    `).join('')
+
+    if (!result.canProceed) {
+      failMsg.style.display = 'block'
+      proceedBtn.disabled = true
+      proceedBtn.style.opacity = '0.5'
+    } else {
+      proceedBtn.disabled = false
+      proceedBtn.style.opacity = '1'
+    }
+    proceedBtnRow.style.display = 'flex'
+  }
+
   function showStep (n) {
     document.querySelectorAll('.step').forEach(s => s.classList.remove('active'))
     document.getElementById(`step-${n}`).classList.add('active')
@@ -1454,25 +1530,24 @@
   async function pullEmbeddingModel () {
     const MODEL = 'bge-m3:latest'
 
-    // 先檢查是否已安裝
+    // 檢查 Docker Ollama 容器內是否已有此模型（非主機 CLI）
     setCstep('embedding', 'running', '正在檢查 Embedding 模型...')
     try {
-      const listRes = await window.setupBridge.listOllamaModels()
-      const installed = listRes.success ? (listRes.models || []) : []
-      if (installed.some(m => m === MODEL || m.startsWith('bge-m3'))) {
+      const checkRes = await window.setupBridge.checkDockerOllamaModel(MODEL)
+      if (checkRes.success && checkRes.installed) {
         setCstep('embedding', 'done', '模型已安裝，跳過下載')
         return { success: true }
       }
     } catch { /* 無法取得清單，繼續嘗試 pull */ }
 
-    // 尚未安裝，強制 pull
+    // 在 Docker 容器內下載
     setCstep('embedding', 'running', '正在下載 AI Embedding 模型，約 1.2GB，請稍候...')
     const progArea = document.getElementById('embedding-progress-area')
     const progLabel = document.getElementById('embedding-progress-label')
     if (progArea) progArea.style.display = 'block'
     if (progLabel) progLabel.textContent = '正在下載 AI Embedding 模型，約 1.2GB，請稍候...'
 
-    const result = await window.setupBridge.pullOllamaModel(MODEL)
+    const result = await window.setupBridge.pullDockerOllamaModel(MODEL)
 
     if (progArea) progArea.style.display = 'none'
 

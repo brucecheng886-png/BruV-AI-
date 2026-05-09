@@ -167,7 +167,26 @@ async function checkRequiredPorts () {
   const busy = []
   for (const { port, name } of REQUIRED_PORTS) {
     const free = await checkPortFree(port)
-    if (!free) busy.push(`  • Port ${port}  (${name})`)
+    if (!free) {
+      // 嘗試找出佔用程序名稱
+      let processName = ''
+      try {
+        const out = await runCommand(`netstat -ano | findstr ":${port} "`, 5000)
+        // 取得第一個 LISTENING 的 PID
+        const match = out.match(/:${port}\s+\S+\s+LISTENING\s+(\d+)/i)
+          || out.match(/:${port}\s+\S+\s+\S+\s+(\d+)/i)
+        if (match) {
+          const pid = match[1]
+          const nameOut = await runCommand(`tasklist /fi "PID eq ${pid}" /fo csv /nh`, 4000)
+          const nameParts = nameOut.trim().split(',')
+          if (nameParts.length > 0) {
+            processName = nameParts[0].replace(/"/g, '').trim()
+          }
+        }
+      } catch {}
+      const procInfo = processName ? `佔用程序: ${processName}` : ''
+      busy.push(`  • Port ${port}  (${name})${procInfo ? '  —  ' + procInfo : ''}`)
+    }
   }
   return busy
 }
@@ -484,6 +503,8 @@ function createMain () {
     }
     mainWindow.show()
     mainWindow.focus()
+    // 視窗顯示後延遲 10 秒偵測是否有新版（避免啟動時搶占資源）
+    setTimeout(() => autoUpdater.checkForUpdates().catch(() => {}), 10_000)
   })
 
   // 外部連結用系統瀏覽器開啟
@@ -734,6 +755,122 @@ function setupIPC () {
     } catch (err) {
       return { success: false, error: err.message }
     }
+  })
+
+  // ── 診斷報告 ──────────────────────────────────────────────────────────────
+  ipcMain.handle('diagnostic:generate', async () => {
+    const os = require('os')
+    const lines = []
+    const ts = new Date().toISOString()
+
+    lines.push('═══════════════════════════════════════════════')
+    lines.push(`  BruV AI 診斷報告`)
+    lines.push(`  產生時間: ${ts}`)
+    lines.push('═══════════════════════════════════════════════')
+    lines.push('')
+
+    // ── App 資訊 ─────────────────────────────────────────────────────────────
+    lines.push('【App 資訊】')
+    lines.push(`  版本: ${app.getVersion()}`)
+    lines.push(`  環境: ${app.isPackaged ? 'packaged' : 'development'}`)
+    lines.push(`  userData: ${app.getPath('userData')}`)
+    lines.push('')
+
+    // ── 系統資訊 ─────────────────────────────────────────────────────────────
+    lines.push('【系統資訊】')
+    lines.push(`  OS: ${os.type()} ${os.release()} (${os.arch()})`)
+    lines.push(`  CPU: ${os.cpus()[0]?.model || 'unknown'} × ${os.cpus().length}`)
+    lines.push(`  RAM 總量: ${(os.totalmem() / 1024 / 1024 / 1024).toFixed(1)} GB`)
+    lines.push(`  RAM 可用: ${(os.freemem() / 1024 / 1024 / 1024).toFixed(1)} GB`)
+    lines.push('')
+
+    // ── Docker 狀態 ──────────────────────────────────────────────────────────
+    lines.push('【Docker 狀態】')
+    const runCmd = (cmd, timeout = 8000) => new Promise((resolve) => {
+      exec(cmd, { timeout }, (err, stdout, stderr) => {
+        resolve({ ok: !err, stdout: (stdout || '').trim(), stderr: (stderr || '').trim() })
+      })
+    })
+    const dockerVersion = await runCmd('docker --version')
+    lines.push(`  版本: ${dockerVersion.ok ? dockerVersion.stdout : '無法取得 - ' + dockerVersion.stderr}`)
+    const dockerInfo = await runCmd('docker info --format "Server Version: {{.ServerVersion}}"')
+    lines.push(`  daemon: ${dockerInfo.ok ? dockerInfo.stdout : '未執行'}`)
+
+    // 容器清單
+    const containers = await runCmd('docker ps -a --format "table {{.Names}}\\t{{.Status}}\\t{{.Ports}}"')
+    lines.push('')
+    lines.push('  容器清單:')
+    if (containers.ok && containers.stdout) {
+      containers.stdout.split('\n').forEach(l => lines.push('    ' + l))
+    } else {
+      lines.push('    無法取得')
+    }
+    lines.push('')
+
+    // ── 各容器 log（最後 50 行）────────────────────────────────────────────────
+    const containerNames = ['bruv_ai_backend', 'bruv_ai_nginx', 'bruv_ai_postgres', 'bruv_ai_redis', 'bruv_ai_celery', 'bruv_ai_ollama']
+    for (const name of containerNames) {
+      lines.push(`【容器 Log: ${name}】`)
+      const log = await runCmd(`docker logs --tail 50 ${name} 2>&1`, 15000)
+      if (log.ok || log.stdout) {
+        const logText = (log.stdout || log.stderr || '').trim()
+        logText.split('\n').forEach(l => lines.push('  ' + l))
+      } else {
+        lines.push('  無法取得（容器可能未運行）')
+      }
+      lines.push('')
+    }
+
+    // ── .env（遮蔽敏感欄位）────────────────────────────────────────────────────
+    lines.push('【設定檔 .env（密碼已遮蔽）】')
+    try {
+      const envPath = path.join(app.getPath('userData'), '.env')
+      if (fs.existsSync(envPath)) {
+        const envContent = fs.readFileSync(envPath, 'utf8')
+        const masked = envContent.replace(/(PASSWORD|SECRET|KEY|TOKEN|AUTH)=.*/gi, '$1=*****')
+        masked.split('\n').forEach(l => lines.push('  ' + l))
+      } else {
+        lines.push('  .env 不存在')
+      }
+    } catch (e) {
+      lines.push('  讀取失敗: ' + e.message)
+    }
+    lines.push('')
+
+    // ── 磁碟空間 ─────────────────────────────────────────────────────────────
+    lines.push('【磁碟空間】')
+    const diskInfo = await runCmd('wmic logicaldisk get deviceid,freespace,size /format:csv', 8000)
+    if (diskInfo.ok) {
+      diskInfo.stdout.split('\n').filter(l => l.trim() && !l.startsWith('Node')).forEach(l => lines.push('  ' + l.trim()))
+    } else {
+      lines.push('  無法取得')
+    }
+    lines.push('')
+
+    lines.push('═══════════════════════════════════════════════')
+    lines.push('  報告結束')
+    lines.push('═══════════════════════════════════════════════')
+
+    const reportContent = lines.join('\n')
+    const dateStr = ts.slice(0, 10)
+    const fileName = `bruv-ai-diagnostic-${dateStr}.txt`
+
+    // 儲存到 Downloads 或 Desktop
+    let savePath = null
+    try {
+      const downloadsDir = path.join(os.homedir(), 'Downloads')
+      if (fs.existsSync(downloadsDir)) {
+        savePath = path.join(downloadsDir, fileName)
+      } else {
+        savePath = path.join(os.homedir(), 'Desktop', fileName)
+      }
+      fs.writeFileSync(savePath, reportContent, 'utf8')
+      shell.showItemInFolder(savePath)
+    } catch (e) {
+      return { ok: false, error: e.message }
+    }
+
+    return { ok: true, path: savePath, fileName }
   })
 }
 
@@ -987,6 +1124,71 @@ function updateEnvFile (envPath, updates) {
  * 必須在 app.whenReady() 之後呼叫。
  */
 function setupSetupIPC (setupCompleteFile) {
+  // ── Step 1: 環境預檢 ──
+  ipcMain.handle('setup:checkEnvironment', async () => {
+    const os = require('os')
+    const checks = []
+
+    // RAM 檢查（建議 8GB+，最低 4GB）
+    const totalRamGB = os.totalmem() / 1024 / 1024 / 1024
+    checks.push({
+      key: 'ram',
+      label: '記憶體',
+      detail: `${totalRamGB.toFixed(1)} GB（建議 8GB+）`,
+      status: totalRamGB >= 8 ? 'ok' : totalRamGB >= 4 ? 'warn' : 'fail',
+    })
+
+    // 磁碟空間檢查（建議 20GB+）
+    try {
+      const diskRaw = await runCommand('wmic logicaldisk where drivetype=3 get deviceid,freespace /format:csv', 8000)
+      let maxFreeGB = 0
+      let driveInfo = ''
+      diskRaw.split('\n').forEach(line => {
+        const parts = line.trim().split(',')
+        if (parts.length >= 3 && parts[2] && /^\d+$/.test(parts[2].trim())) {
+          const freeGB = parseInt(parts[2].trim()) / 1024 / 1024 / 1024
+          if (freeGB > maxFreeGB) {
+            maxFreeGB = freeGB
+            driveInfo = `${parts[1] || ''}（${freeGB.toFixed(1)} GB 可用）`
+          }
+        }
+      })
+      checks.push({
+        key: 'disk',
+        label: '磁碟空間',
+        detail: driveInfo || `${maxFreeGB.toFixed(1)} GB 可用（建議 20GB+）`,
+        status: maxFreeGB >= 20 ? 'ok' : maxFreeGB >= 10 ? 'warn' : 'fail',
+      })
+    } catch {
+      checks.push({ key: 'disk', label: '磁碟空間', detail: '無法取得', status: 'warn' })
+    }
+
+    // 虛擬化支援檢查
+    try {
+      const virtRaw = await runCommand('wmic cpu get VirtualizationFirmwareEnabled /format:csv', 8000)
+      const enabled = virtRaw.toLowerCase().includes('true')
+      checks.push({
+        key: 'virt',
+        label: '虛擬化（VT-x/AMD-V）',
+        detail: enabled ? '已啟用（BIOS）' : '未啟用，Docker 可能無法運行',
+        status: enabled ? 'ok' : 'fail',
+      })
+    } catch {
+      checks.push({ key: 'virt', label: '虛擬化（VT-x/AMD-V）', detail: '無法偵測', status: 'warn' })
+    }
+
+    // 網路連線檢查
+    try {
+      await runCommand('ping -n 1 -w 3000 8.8.8.8', 6000)
+      checks.push({ key: 'network', label: '網路連線', detail: '正常', status: 'ok' })
+    } catch {
+      checks.push({ key: 'network', label: '網路連線', detail: '無法連線（下載模型可能失敗）', status: 'warn' })
+    }
+
+    const hasFail = checks.some(c => c.status === 'fail')
+    return { checks, canProceed: !hasFail }
+  })
+
   // ── Step 2: 檢測 Docker 是否安裝 ──
   ipcMain.handle('setup:checkDocker', async () => {
     try {
@@ -1073,7 +1275,7 @@ function setupSetupIPC (setupCompleteFile) {
     }
   })
 
-  // ── Step 4: 下載 Ollama 模型（流式進度） ──
+  // ── Step 4: 下載 Ollama 模型（流式進度，走主機 CLI）──
   ipcMain.handle('setup:pullOllamaModel', (event, modelName) => {
     return new Promise((resolve) => {
       const child = spawn('ollama', ['pull', modelName], {
@@ -1111,6 +1313,54 @@ function setupSetupIPC (setupCompleteFile) {
       child.on('error', (err) => {
         resolve({ success: false, error: err.message })
       })
+    })
+  })
+
+  // ── Step 6: 檢查模型是否已在 Docker Ollama 容器內 ──
+  ipcMain.handle('setup:checkDockerOllamaModel', async (_, modelName) => {
+    try {
+      const resp = await fetch('http://localhost:11434/api/tags')
+      if (!resp.ok) return { success: false, installed: false }
+      const data = await resp.json()
+      const models = data.models || []
+      const baseName = modelName.split(':')[0]
+      const installed = models.some(m => m.name === modelName || m.name.startsWith(baseName))
+      return { success: true, installed }
+    } catch (e) {
+      return { success: false, installed: false, error: e.message }
+    }
+  })
+
+  // ── Step 6: 在 Docker Ollama 容器內下載模型（docker exec + streaming）──
+  ipcMain.handle('setup:pullDockerOllamaModel', (event, modelName) => {
+    return new Promise((resolve) => {
+      const child = spawn('docker', ['exec', 'bruv_ai_ollama', 'ollama', 'pull', modelName], {
+        stdio: ['ignore', 'pipe', 'pipe']
+      })
+      let currentPercent = 0
+
+      const handleData = (data) => {
+        if (event.sender.isDestroyed()) return
+        const text = data.toString()
+          .replace(/\x1B\[[0-9;]*m/g, '')
+          .replace(/\r/g, '\n')
+        const lines = text.split('\n').filter(l => l.trim())
+        for (const line of lines) {
+          const pctMatch = line.match(/(\d+)%/)
+          if (pctMatch) currentPercent = parseInt(pctMatch[1])
+          event.sender.send('setup:ollamaProgress', {
+            model: modelName,
+            line: line.trim(),
+            percent: pctMatch ? currentPercent : null,
+            done: line.trim().toLowerCase() === 'success'
+          })
+        }
+      }
+
+      child.stdout.on('data', handleData)
+      child.stderr.on('data', handleData)
+      child.on('close', (code) => resolve({ success: code === 0 }))
+      child.on('error', (err) => resolve({ success: false, error: err.message }))
     })
   })
 
@@ -1492,6 +1742,7 @@ function setupAutoUpdater () {
   })
   autoUpdater.on('error', (err) => {
     console.error('[autoUpdater] 錯誤：', err?.message || err)
+    mainWindow?.webContents.send('update-error', err?.message || String(err))
   })
   autoUpdater.on('download-progress', (p) => {
     const pct = Math.round(p.percent)

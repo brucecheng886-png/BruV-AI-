@@ -13,9 +13,11 @@ contextBridge.exposeInMainWorld('electronApp', {
   onUpdateDownloaded:   (cb) => ipcRenderer.on('update-downloaded',       (_, info) => cb(info)),
   onUpdateNotAvailable: (cb) => ipcRenderer.on('update-not-available',    (_)       => cb()),
   onDownloadProgress:   (cb) => ipcRenderer.on('update-download-progress',(_, info) => cb(info)),
+  onUpdateError:        (cb) => ipcRenderer.on('update-error',            (_, msg)  => cb(msg)),
   checkForUpdate:  () => ipcRenderer.invoke('updater:check'),
   downloadUpdate:  () => ipcRenderer.invoke('updater:download'),
   installUpdate:   () => ipcRenderer.send('updater:install'),
+  generateDiagnostic: () => ipcRenderer.invoke('diagnostic:generate'),
 })
 
 // Token 持久化（safeStorage）
