@@ -695,6 +695,41 @@ function setupIPC () {
     spawnUpdateBridge()
     autoUpdater.quitAndInstall(true, true)
   })
+
+  // ── 更新 Docker 服務（pull latest images + restart）──
+  ipcMain.handle('services:update', async (event) => {
+    const send = (msg) => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('services:update-log', msg)
+      }
+    }
+    const gpuOverridePath = await ensureGpuOverride().catch(() => null)
+    const composeArgs = ['-p', COMPOSE_PROJECT, '-f', composePath]
+    if (gpuOverridePath) composeArgs.push('-f', gpuOverridePath)
+    composeArgs.push('--env-file', envPath)
+
+    const runCompose = (subArgs) => new Promise((resolve, reject) => {
+      const child = spawn('docker', ['compose', ...composeArgs, ...subArgs], { stdio: ['ignore', 'pipe', 'pipe'] })
+      child.stdout.on('data', (d) => d.toString().split(/\r?\n/).filter(l => l.trim()).forEach(send))
+      child.stderr.on('data', (d) => d.toString().split(/\r?\n/).filter(l => l.trim()).forEach(send))
+      const timer = setTimeout(() => { child.kill(); reject(new Error('逾時')) }, 600000)
+      child.on('close', (code) => { clearTimeout(timer); code === 0 ? resolve() : reject(new Error(`exit ${code}`)) })
+      child.on('error', (err) => { clearTimeout(timer); reject(err) })
+    })
+
+    try {
+      send('正在拉取最新服務映像檔...')
+      await runCompose(['pull'])
+      send('映像檔已拉取，正在重啟服務...')
+      await runCompose(['up', '-d', '--remove-orphans'])
+      send('服務已更新並重啟完成。')
+      return { ok: true }
+    } catch (err) {
+      send(`更新失敗：${err.message}`)
+      return { ok: false, error: err.message }
+    }
+  })
+
   // ── Token 持久化（safeStorage）──
   const tokenFilePath = () => path.join(app.getPath('userData'), 'token.enc')
 
@@ -1124,6 +1159,29 @@ function updateEnvFile (envPath, updates) {
  * 必須在 app.whenReady() 之後呼叫。
  */
 function setupSetupIPC (setupCompleteFile) {
+  // ── Step 0: 偵測是否有舊有安裝資料 ──
+  ipcMain.handle('setup:detectExistingData', async () => {
+    try {
+      // 1. 舊 .env 是否存在且有設定過（檔案大小 > 50 bytes）
+      const envExists = fs.existsSync(envPath) && fs.statSync(envPath).size > 50
+
+      // 2. Docker volumes 是否存在
+      let volumesExist = false
+      if (envExists) {
+        try {
+          const volOut = await runCommand(
+            `docker volume ls --filter name=bruv_ai --format "{{.Name}}"`, 5000
+          )
+          volumesExist = volOut.trim().length > 0
+        } catch { /* Docker 未跑，無法判斷 */ }
+      }
+
+      return { hasExistingData: envExists && volumesExist }
+    } catch (err) {
+      return { hasExistingData: false }
+    }
+  })
+
   // ── Step 1: 環境預檢 ──
   ipcMain.handle('setup:checkEnvironment', async () => {
     const os = require('os')
@@ -1170,8 +1228,8 @@ function setupSetupIPC (setupCompleteFile) {
       checks.push({
         key: 'virt',
         label: '虛擬化（VT-x/AMD-V）',
-        detail: enabled ? '已啟用（BIOS）' : '未啟用，Docker 可能無法運行',
-        status: enabled ? 'ok' : 'fail',
+        detail: enabled ? '已啟用（BIOS）' : '未偵測到（若 Docker 可正常執行則可忽略）',
+        status: enabled ? 'ok' : 'warn',
       })
     } catch {
       checks.push({ key: 'virt', label: '虛擬化（VT-x/AMD-V）', detail: '無法偵測', status: 'warn' })
@@ -1382,7 +1440,8 @@ function setupSetupIPC (setupCompleteFile) {
   })
 
   // ── Step 6: 啟動容器服務 ──
-  ipcMain.handle('setup:startServices', async (event) => {
+  ipcMain.handle('setup:startServices', async (event, opts = {}) => {
+    const preserveData = opts?.preserveData === true
     const { missingTemplate } = ensureEnvFile()
     if (missingTemplate) {
       return { success: false, error: '找不到 .env.example，安裝可能不完整。請重新安裝 BruV AI。' }
@@ -1406,12 +1465,14 @@ function setupSetupIPC (setupCompleteFile) {
         { timeout: 60000 }, () => resolve()
       )
     })
-    // ⚠️ Setup wizard 執行時，舊 volume 的密碼可能與當前 .env 不符（解除安裝/重裝導致），
-    //    必須無條件清除舊 volume，確保 postgres 以當前 .env 密碼全新初始化。
-    //    freshlyCreated 機制已不可靠（saveEnvSettings 也會呼叫 ensureEnvFile，
-    //    導致 startServices 到達時 freshlyCreated 永遠是 false）。
-    event.sender.send('setup:dockerLog', '正在清除舊資料庫 volume（確保密碼一致）...')
-    await purgeStatefulVolumes()
+    if (preserveData) {
+      // 復原模式：保留 volumes，直接用舊 .env 的密碼啟動
+      event.sender.send('setup:dockerLog', '復原模式：保留資料庫 volume，直接啟動...')
+    } else {
+      // 全新安裝：清除舊 volume 確保 Postgres 密碼一致
+      event.sender.send('setup:dockerLog', '正在清除舊資料庫 volume（確保密碼一致）...')
+      await purgeStatefulVolumes()
+    }
 
     // 用 spawn 串流 stdout/stderr，即時傳給前端顯示
     const upArgs = ['compose', '-p', COMPOSE_PROJECT, '-f', composePath]

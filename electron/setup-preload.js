@@ -39,8 +39,8 @@ contextBridge.exposeInMainWorld('setupBridge', {
   saveEnvSettings: (settings) =>
     ipcRenderer.invoke('setup:saveEnvSettings', settings),
 
-  // Step 6: 啟動容器服務
-  startServices: () => ipcRenderer.invoke('setup:startServices'),
+  // Step 6: 啟動容器服務（opts.preserveData=true 時保留舊 volumes）
+  startServices: (opts) => ipcRenderer.invoke('setup:startServices', opts),
 
   // Step 6: Docker compose 即時 log（串流）
   onDockerLog: (cb) =>
@@ -60,6 +60,9 @@ contextBridge.exposeInMainWorld('setupBridge', {
 
   // 通用：在系統瀏覽器開啟外部連結
   openExternal: (url) => ipcRenderer.invoke('setup:openExternal', url),
+
+  // Step 1: 偵測是否有舊有安裝資料
+  detectExistingData: () => ipcRenderer.invoke('setup:detectExistingData'),
 
   // Step 1: 環境預檢
   checkEnvironment: () => ipcRenderer.invoke('setup:checkEnvironment'),

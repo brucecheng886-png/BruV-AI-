@@ -35,25 +35,23 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed } from 'vue'
 import { useAuthStore } from '../stores/auth.js'
+import { useUpdateStore } from '../stores/update.js'
 import { useRouter } from 'vue-router'
 import { MessageSquare, FolderOpen, Network, Puzzle, Dna, Settings, LogOut, RefreshCw } from 'lucide-vue-next'
 
 const authStore = useAuthStore()
+const updateStore = useUpdateStore()
 const router = useRouter()
 
 const appVersion = ref(window.electronApp?.version || '')
-const hasNewVersion = ref(false)
+const hasNewVersion = computed(() => !!updateStore.newVersion)
 const isElectron = navigator.userAgent.includes('Electron') || !!window.electronApp?.version
 
 function reloadApp () {
   window.electronApp?.reload?.()
 }
-
-onMounted(() => {
-  window.electronApp?.onUpdateAvailable?.(() => { hasNewVersion.value = true })
-})
 
 function goToUpdateSettings() {
   router.push({ path: '/settings', query: { group: 'update' } })

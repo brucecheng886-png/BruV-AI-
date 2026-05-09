@@ -44,13 +44,14 @@ import { useRoute } from 'vue-router'
 import NavBar from './components/NavBar.vue'
 import AgentPanel from './components/AgentPanel.vue'
 import { useAuthStore } from './stores/auth.js'
+import { useUpdateStore } from './stores/update.js'
 
 const authStore = useAuthStore()
+const updateStore = useUpdateStore()
 const route = useRoute()
 const isElectron = navigator.userAgent.includes('Electron') || !!window.electronApp?.version
 const appVersion = computed(() => window.electronApp?.version || '')
 const agentPanelOpen = ref(false)
-const updateInfo = ref(null)
 const isUpdating = ref(false)
 
 // 對話頁面不顯示 AgentPanel
@@ -70,10 +71,10 @@ onMounted(() => {
   if (window.electronApp?.version) {
     document.documentElement.classList.add('electron-app')
     window.electronApp.onUpdateAvailable?.((info) => {
-      updateInfo.value = { ...info, ready: false }
+      updateStore.setAvailable(info?.version || '')
     })
     window.electronApp.onUpdateDownloaded?.((info) => {
-      updateInfo.value = { ...info, ready: true }
+      updateStore.setDownloaded(info?.version || '')
     })
   }
 })

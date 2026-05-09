@@ -18,6 +18,8 @@ contextBridge.exposeInMainWorld('electronApp', {
   downloadUpdate:  () => ipcRenderer.invoke('updater:download'),
   installUpdate:   () => ipcRenderer.send('updater:install'),
   generateDiagnostic: () => ipcRenderer.invoke('diagnostic:generate'),
+  updateServices:       () => ipcRenderer.invoke('services:update'),
+  onServicesUpdateLog:  (cb) => ipcRenderer.on('services:update-log', (_, msg) => cb(msg)),
 })
 
 // Token 持久化（safeStorage）

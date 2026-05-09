@@ -502,8 +502,26 @@
     <button class="btn btn-primary" onclick="doEnvCheckAndProceed()">開始設定</button>
   </div>
   <div class="btn-row" id="env-proceed-btn-row" style="display:none;">
-    <button class="btn btn-primary" id="env-proceed-btn" onclick="showStep(2)">繼續</button>
+    <button class="btn btn-primary" id="env-proceed-btn" onclick="afterEnvCheck()">繼續</button>
     <button class="btn btn-secondary" onclick="doEnvCheckAndProceed()" style="margin-left:8px;">重新檢測</button>
+  </div>
+
+  <!-- 舊資料偵測卡片（環境預檢通過後，若偵測到舊 volumes 才顯示）-->
+  <div id="restore-choice-area" style="display:none; width:100%; margin-top:16px;">
+    <div style="border:1.5px solid #6c63ff;border-radius:10px;padding:16px;background:rgba(108,99,255,0.1);">
+      <div style="font-weight:700;font-size:14px;color:#c8c0ff;margin-bottom:6px;">⚡ 偵測到舊有安裝資料</div>
+      <div style="font-size:13px;color:#94a3b8;margin-bottom:14px;">
+        找到您先前的資料庫 Volume 和設定檔，可以選擇直接恢復，跳過帳號設定步驟。
+      </div>
+      <div style="display:flex;gap:10px;">
+        <button class="btn btn-primary" style="flex:1;" onclick="chooseRestore(true)">
+          ✅ 恢復舊有資料
+        </button>
+        <button class="btn btn-secondary" style="flex:1;" onclick="chooseRestore(false)">
+          🗑️ 全新安裝（清除舊資料）
+        </button>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -576,22 +594,11 @@
   <div class="step-title">AI 模型安裝</div>
   <div class="step-desc">
     BruV AI 使用 Ollama 執行地端 AI 模型。<br>
-    需要下載兩個模型（共約 10GB），請確認網路穩定後開始。
+    此步驟將下載主要語言模型 <strong>qwen2.5:14b</strong>（約 9GB）到本機。<br>
+    <span style="color:#94a3b8;font-size:13px;">Embedding 模型（bge-m3）將在最後一步啟動容器後自動安裝。</span>
   </div>
 
-  <!-- GPU 偏好選擇 -->
-  <div class="field-group" id="gpu-pref-section" style="display:none; width:100%; margin-bottom:12px;">
-    <label class="field-label">運算模式</label>
-    <div style="display:flex; gap:10px; margin-top:6px;">
-      <label style="display:flex; align-items:center; gap:6px; cursor:pointer; flex:1; padding:10px 12px; border:1px solid var(--border); border-radius:8px; background:var(--surface)">
-        <input type="radio" name="gpu-pref" value="999" checked> <span><b>自動</b><br><span style="font-size:11px; color:var(--text-muted)">有 GPU 盡量用 GPU，不夠再補 CPU</span></span>
-      </label>
-      <label style="display:flex; align-items:center; gap:6px; cursor:pointer; flex:1; padding:10px 12px; border:1px solid var(--border); border-radius:8px; background:var(--surface)">
-        <input type="radio" name="gpu-pref" value="0"> <span><b>純 CPU</b><br><span style="font-size:11px; color:var(--text-muted)">不使用 GPU，速度較慢但穩定</span></span>
-      </label>
-    </div>
-    <div class="field-hint" id="gpu-pref-hint"></div>
-  </div>
+
 
   <!-- Ollama 安裝狀態 -->
   <div class="status-box" id="ollama-check-box">
@@ -635,14 +642,6 @@
         </div>
         <div style="display:flex; align-items:center; gap:8px;">
           <span class="model-tag pending" id="model-tag-qwen">待下載</span>
-          <button class="btn btn-primary" id="btn-dl-qwen"
-            onclick="pullModel('qwen2.5:14b')" style="padding:6px 14px; font-size:12px">
-            開始下載
-          </button>
-          <button class="btn btn-secondary" id="btn-skip-qwen"
-            onclick="skipModel('qwen2.5:14b')" style="padding:6px 12px; font-size:12px">
-            稍後
-          </button>
         </div>
       </div>
       <div class="progress-wrap" id="progress-wrap-qwen" style="display:none">
@@ -653,36 +652,6 @@
         <div class="progress-bar"><div class="progress-fill" id="progress-fill-qwen" style="width:0%"></div></div>
       </div>
       <div class="model-log" id="model-log-qwen"></div>
-    </div>
-
-    <!-- bge-m3 -->
-    <div class="model-card" id="model-card-bge">
-      <div class="model-header">
-        <div>
-          <div class="model-name">bge-m3</div>
-          <div class="model-size">嵌入向量模型  /  約 1.2 GB</div>
-        </div>
-        <div style="display:flex; align-items:center; gap:8px;">
-          <span class="model-tag pending" id="model-tag-bge">待下載</span>
-          <span style="font-size:11px; font-weight:600; color:#e55; background:#fff0f0; border:1px solid #f99; border-radius:4px; padding:2px 7px;">必要</span>
-          <button class="btn btn-primary" id="btn-dl-bge"
-            onclick="pullModel('bge-m3')" style="padding:6px 14px; font-size:12px">
-            開始下載
-          </button>
-        </div>
-      </div>
-      <div class="progress-wrap" id="progress-wrap-bge" style="display:none">
-        <div class="progress-label">
-          <span id="progress-text-bge">準備中...</span>
-          <span id="progress-pct-bge">0%</span>
-        </div>
-        <div class="progress-bar"><div class="progress-fill" id="progress-fill-bge" style="width:0%"></div></div>
-      </div>
-      <div class="model-log" id="model-log-bge"></div>
-    </div>
-
-    <div class="warn-banner" id="model-skip-warn">
-      部分模型尚未下載，AI 功能可能無法正常使用。您可以在啟動後從設定頁面補充下載。
     </div>
 
     <div class="btn-row">
@@ -697,7 +666,7 @@
 <!-- ═══════════════════ Step 5: 環境變數設定 ════════════════════ -->
 <div class="step" id="step-5">
   <div class="step-title">基本設定</div>
-  <div class="step-desc">設定管理員帳號與雲端 AI 選項。這些設定之後仍可在系統設定頁面修改。</div>
+  <div class="step-desc">設定管理員帳號與初始密碼，之後可在系統設定頁面修改。</div>
 
   <div style="width:100%">
     <div class="field-group">
@@ -727,34 +696,7 @@
       <div class="field-success" id="password-confirm-ok">✓ 密碼一致</div>
     </div>
 
-    <div class="toggle-row">
-      <div>
-        <div class="toggle-label">啟用雲端 AI</div>
-        <div class="toggle-sub">使用 Claude / OpenAI / Groq 雲端模型（需要 API Key）</div>
-      </div>
-      <label class="toggle-switch">
-        <input type="checkbox" id="use-cloud-ai" onchange="toggleCloudAI(this.checked)">
-        <span class="toggle-track"></span>
-      </label>
-    </div>
 
-    <div class="api-section" id="api-section">
-      <div class="field-group">
-        <label class="field-label" for="anthropic-key">Anthropic API Key（Claude）</label>
-        <input type="password" class="field-input" id="anthropic-key"
-          placeholder="sk-ant-...（選填，之後可在設定頁補充）">
-      </div>
-      <div class="field-group">
-        <label class="field-label" for="openai-key">OpenAI API Key</label>
-        <input type="password" class="field-input" id="openai-key"
-          placeholder="sk-...（選填，之後可在設定頁補充）">
-      </div>
-      <div class="field-group">
-        <label class="field-label" for="groq-key">Groq API Key</label>
-        <input type="password" class="field-input" id="groq-key"
-          placeholder="gsk_...（選填，之後可在設定頁補充）">
-      </div>
-    </div>
   </div>
 
   <div class="btn-row">
@@ -869,11 +811,12 @@
 
   // ── State ─────────────────────────────────────────────────
   let currentStep = 1
+  let restoreMode = false   // 復原模式：保留舊 volumes，跳過 Step 5 帳號設定
   const pullLayers = new Map() // layerId -> { downloaded, total, status }
 
+  // 注意：bge-m3 不在 Step 4 管理（它必須安裝到 Docker Ollama 容器內，由 Step 6 pullEmbeddingModel 做真實檢查和安裝）
   const modelState = {
-    'qwen2.5:14b': { status: 'pending', percent: 0 },
-    'bge-m3':      { status: 'pending', percent: 0 }
+    'qwen2.5:14b': { status: 'pending', percent: 0 }
   }
 
   // Step 5 暫存的管理員帳密，Step 6 後端就緒後傳給 init-admin
@@ -917,11 +860,11 @@
     const statusColor = { ok: '#4caf50', warn: '#ff9800', fail: '#ef5350' }
 
     resultsDiv.innerHTML = result.checks.map(c => `
-      <div style="display:flex;align-items:flex-start;gap:10px;margin-bottom:8px;padding:8px 10px;background:#f5f5f7;border-radius:6px;">
-        <span style="font-size:15px;color:${statusColor[c.status]};flex-shrink:0;min-width:18px;">${statusIcon[c.status]}</span>
+      <div style="display:flex;align-items:flex-start;gap:10px;margin-bottom:8px;padding:8px 12px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);border-radius:8px;">
+        <span style="font-size:15px;color:${statusColor[c.status]};flex-shrink:0;min-width:18px;margin-top:1px;">${statusIcon[c.status]}</span>
         <div>
-          <div style="font-weight:600;font-size:13px;">${c.label}</div>
-          <div style="font-size:12px;color:#666;">${c.detail}</div>
+          <div style="font-weight:600;font-size:13px;color:#e2e8f0;">${c.label}</div>
+          <div style="font-size:12px;color:#94a3b8;margin-top:2px;">${c.detail}</div>
         </div>
       </div>
     `).join('')
@@ -937,7 +880,32 @@
     proceedBtnRow.style.display = 'flex'
   }
 
+  async function afterEnvCheck () {
+    // 環境預檢通過後，偵測是否有舊資料
+    const restoreArea = document.getElementById('restore-choice-area')
+    try {
+      const res = await window.setupBridge.detectExistingData()
+      if (res?.hasExistingData) {
+        restoreArea.style.display = 'block'
+        document.getElementById('env-proceed-btn-row').style.display = 'none'
+        return
+      }
+    } catch {}
+    // 沒有舊資料或偵測失敗，直接全新安裝
+    restoreMode = false
+    showStep(2)
+  }
+
+  function chooseRestore (restore) {
+    restoreMode = restore
+    document.getElementById('restore-choice-area').style.display = 'none'
+    showStep(2)
+  }
+
   function showStep (n) {
+    // 復原模式：Step 4 結束後直接跳到 Step 6，跳過 Step 5 帳號設定
+    if (restoreMode && n === 5) { n = 6 }
+
     document.querySelectorAll('.step').forEach(s => s.classList.remove('active'))
     document.getElementById(`step-${n}`).classList.add('active')
 
@@ -1118,50 +1086,33 @@
         label.textContent = 'Ollama 已安裝'
         sub.textContent   = result.version || ''
         document.getElementById('model-section').style.display = 'block'
-        // 顯示 GPU 偏好（偵測 GPU）
-        try {
-          const gpuInfo = await window.setupBridge.detectGpu()
-          const gpuSection = document.getElementById('gpu-pref-section')
-          const gpuHint = document.getElementById('gpu-pref-hint')
-          if (gpuInfo && gpuInfo.hasGpu) {
-            gpuSection.style.display = 'block'
-            gpuHint.textContent = `偵測到 GPU：${gpuInfo.name || 'NVIDIA GPU'}，預設自動混合使用 GPU + CPU`
-          } else {
-            gpuSection.style.display = 'none'
-          }
-        } catch {}
         // 主動偵測已下載的模型，已存在就標記為 done
         try {
           const list = await window.setupBridge.listOllamaModels()
           if (list && list.success && Array.isArray(list.models)) {
             const has = (target) => list.models.some(m => m === target || m.startsWith(target + ':') || target.startsWith(m + ':') || m.split(':')[0] === target.split(':')[0])
-            for (const name of ['qwen2.5:14b', 'bge-m3']) {
-              if (has(name)) {
-                modelState[name].status  = 'done'
-                modelState[name].percent = 100
-                const id = modelId(name)
-                setModelTag(name, 'done')
-                const fill = document.getElementById(`progress-fill-${id}`)
-                const pct  = document.getElementById(`progress-pct-${id}`)
-                const wrap = document.getElementById(`progress-wrap-${id}`)
-                const text = document.getElementById(`progress-text-${id}`)
-                if (fill) fill.style.width = '100%'
-                if (pct)  pct.textContent  = '100%'
-                if (wrap) wrap.style.display = 'block'
-                if (text) text.textContent = '已安裝（自動偵測）'
-                const btnDl   = document.getElementById(`btn-dl-${id}`)
-                const btnSkip = document.getElementById(`btn-skip-${id}`)
-                if (btnDl)   btnDl.disabled   = true
-                if (btnSkip) btnSkip.disabled = true
-              }
+            // 只檢查 qwen2.5:14b：bge-m3 必須安裝到 Docker Ollama （Step 6），不在此檢查
+            if (has('qwen2.5:14b')) {
+              modelState['qwen2.5:14b'].status  = 'done'
+              modelState['qwen2.5:14b'].percent = 100
+              setModelTag('qwen2.5:14b', 'done')
+              const fill = document.getElementById('progress-fill-qwen')
+              const pct  = document.getElementById('progress-pct-qwen')
+              const wrap = document.getElementById('progress-wrap-qwen')
+              const text = document.getElementById('progress-text-qwen')
+              if (fill) fill.style.width = '100%'
+              if (pct)  pct.textContent  = '100%'
+              if (wrap) wrap.style.display = 'block'
+              if (text) text.textContent = '已安裝（自動偵測）'
             }
           }
-        } catch { /* 忽略偵測失敗，使用者仍可手動下載 */ }
+        } catch {}
         refreshModelNext()
-        // bge-m3 必要模型：若尚未安裝，自動觸發下載
-        if (modelState['bge-m3'].status !== 'done') {
-          pullModel('bge-m3')
-        }
+        // 自動下載 qwen2.5:14b（如果未安裝）
+        // bge-m3 不在此下載：它屬於 Docker Ollama，會在 Step 6 容器啟動後做真實檢查和安裝
+        ;(async () => {
+          if (modelState['qwen2.5:14b'].status !== 'done') await pullModel('qwen2.5:14b')
+        })()
       } else {
         if (progBar)    progBar.style.display    = 'none'
         if (recheckBtn) recheckBtn.disabled = false
@@ -1183,8 +1134,9 @@
   async function pullModel (modelName) {
     const id = modelId(modelName)
 
-    // Disable buttons during download
-    document.getElementById(`btn-dl-${id}`).disabled = true
+    // Disable buttons during download (may not exist in auto-download mode)
+    const _btnDlStart = document.getElementById(`btn-dl-${id}`)
+    if (_btnDlStart) _btnDlStart.disabled = true
     const _skipBtnStart = document.getElementById(`btn-skip-${id}`)
     if (_skipBtnStart) _skipBtnStart.disabled = true
     document.querySelectorAll('[id^="btn-dl-"]').forEach(b => b.disabled = true)
@@ -1207,7 +1159,8 @@
       setModelTag(modelName, 'error')
       document.getElementById(`model-log-${id}`).textContent =
         result.error || '下載失敗，請稍後重試'
-      document.getElementById(`btn-dl-${id}`).disabled = false
+      const _btnDlErr = document.getElementById(`btn-dl-${id}`)
+      if (_btnDlErr) _btnDlErr.disabled = false
       const _skipBtnErr = document.getElementById(`btn-skip-${id}`)
       if (_skipBtnErr) _skipBtnErr.disabled = false
     }
@@ -1217,7 +1170,8 @@
     const otherModel = id === 'qwen' ? 'bge-m3' : 'qwen2.5:14b'
     if (modelState[otherModel].status === 'pending' ||
         modelState[otherModel].status === 'error') {
-      document.getElementById(`btn-dl-${otherId}`).disabled = false
+      const _btnDlOther = document.getElementById(`btn-dl-${otherId}`)
+      if (_btnDlOther) _btnDlOther.disabled = false
       const _skipBtnOther = document.getElementById(`btn-skip-${otherId}`)
       if (_skipBtnOther) _skipBtnOther.disabled = false
     }
@@ -1236,14 +1190,9 @@
   }
 
   function refreshModelNext () {
-    const q = modelState['qwen2.5:14b'].status
-    const b = modelState['bge-m3'].status
-    const canNext = (q === 'done' || q === 'skipped') &&
-                    (b === 'done')
+    // 只檢查 qwen2.5:14b：bge-m3 由 Step 6 Docker Ollama 負責，不在此判斷
+    const canNext = modelState['qwen2.5:14b'].status === 'done'
     document.getElementById('btn-model-next').disabled = !canNext
-
-    const hasSkip = q === 'skipped' || b === 'skipped'
-    document.getElementById('model-skip-warn').classList.toggle('visible', hasSkip)
   }
 
   // Ollama progress listener (registered once)
@@ -1417,13 +1366,12 @@
     adminCreds.email    = email
     adminCreds.password = password
 
-    const gpuPrefEl = document.querySelector('input[name="gpu-pref"]:checked')
     const settings = {
-      useCloudAI:    document.getElementById('use-cloud-ai').checked,
-      anthropicApiKey: document.getElementById('anthropic-key').value.trim(),
-      openaiApiKey:    document.getElementById('openai-key').value.trim(),
-      groqApiKey:      document.getElementById('groq-key').value.trim(),
-      ollamaNumGpu:  gpuPrefEl ? gpuPrefEl.value : '999'
+      useCloudAI:      false,
+      anthropicApiKey: '',
+      openaiApiKey:    '',
+      groqApiKey:      '',
+      ollamaNumGpu:    '999'
     }
 
     try {
@@ -1478,7 +1426,7 @@
     // 1. Start services
     setCstep('services', 'running', '正在下載並啟動容器（首次需 5–15 分鐘）...')
     document.getElementById('services-progress-area').style.display = 'block'
-    const svcResult = await window.setupBridge.startServices()
+    const svcResult = await window.setupBridge.startServices({ preserveData: restoreMode })
     document.getElementById('services-progress-area').style.display = 'none'
     if (!svcResult.success) {
       setCstep('services', 'error', svcResult.error || '啟動失敗')
@@ -1504,8 +1452,8 @@
     const embResult = await pullEmbeddingModel()
     if (!embResult.success) return
 
-    // 2.5 初始化管理員帳號
-    if (adminCreds.email && adminCreds.password) {
+    // 2.5 初始化管理員帳號（復原模式跳過，帳號已在舊 DB 中）
+    if (!restoreMode && adminCreds.email && adminCreds.password) {
       const initResult = await window.setupBridge.initAdmin(
         adminCreds.email, adminCreds.password
       )
@@ -1587,6 +1535,9 @@
     banner.textContent = msg
     banner.classList.add('visible')
     document.getElementById('completion-retry-row').style.display = 'flex'
+    // 復原模式下沒有 Step 5 可返回
+    const backBtn = document.querySelector('#completion-retry-row .btn-secondary')
+    if (backBtn) backBtn.style.display = restoreMode ? 'none' : ''
   }
 
   // 只重試 waitForBackend + initAdmin + completeSetup，不重新 down+up
@@ -1611,7 +1562,7 @@
     const embRetryResult = await pullEmbeddingModel()
     if (!embRetryResult.success) return
 
-    if (adminCreds.email && adminCreds.password) {
+    if (!restoreMode && adminCreds.email && adminCreds.password) {
       const initResult = await window.setupBridge.initAdmin(
         adminCreds.email, adminCreds.password
       )

@@ -296,15 +296,26 @@ docker compose ps
 # 所有 container 必須 Status = running，Health = healthy（若有 healthcheck）
 ```
 
-### 7-C. Image Build（正式發布前）
+### 7-C. Image Build 驗證（正式發布前）
+> **注意**：v1.1.6 起已有 GitHub Actions CI/CD，push tag 後自動 build + push 3 個 image。
+> 此步驟改為「確認 CI/CD 執行成功」，不需手動 build。
+
 ```powershell
+# 確認 CI/CD 已成功執行（push tag 後約 10-15 分鐘）
+gh run list --repo brucecheng886-png/BruV-AI- --limit 5
+# 確認最新兩個 workflow（docker-publish, electron-release）狀態為 completed / success
+
+# 若需要手動 build（CI/CD 失敗時的 fallback）：
 # Backend
 docker build -t ghcr.io/brucecheng886-png/bruv-ai-backend:latest ./backend 2>&1 | Select-String "naming|ERROR" | Select-Object -Last 3
 
 # Frontend（nginx）
 docker build -t ghcr.io/brucecheng886-png/bruv-ai-nginx:latest ./frontend 2>&1 | Select-String "naming|ERROR" | Select-Object -Last 3
 
-# 兩者必須都看到 "naming to ... done"
+# Playwright
+docker build -t ghcr.io/brucecheng886-png/bruv-ai-playwright:latest ./playwright-service 2>&1 | Select-String "naming|ERROR" | Select-Object -Last 3
+
+# 三者必須都看到 "naming to ... done"
 ```
 
 ---
@@ -318,15 +329,17 @@ docker build -t ghcr.io/brucecheng886-png/bruv-ai-nginx:latest ./frontend 2>&1 |
 git tag --sort=-version:refname | Select-Object -First 3
 # 應看到最近 3 個版本 tag
 
-# 確認上一個 release 的 Docker image 仍可拉取
-docker pull ghcr.io/brucecheng886-png/bruv-ai-backend:v1.0.48  # 前一版本
+# 確認上一個 release 的 Docker image 仍可拉取（CI/CD 同時 push 版本 tag）
+docker pull ghcr.io/brucecheng886-png/bruv-ai-backend:v1.1.5  # 前一版本
+docker pull ghcr.io/brucecheng886-png/bruv-ai-nginx:v1.1.5
+docker pull ghcr.io/brucecheng886-png/bruv-ai-playwright:v1.1.5
 ```
 
 回滾步驟（若新版本發現嚴重 bug）：
 1. `git checkout v前一版本`
-2. `docker pull ghcr.io/brucecheng886-png/bruv-ai-backend:v前一版本`
-3. 修改 `docker-compose.yml` image tag → 前一版本
-4. `docker compose up -d`
+2. 在 `docker-compose.release.yml` 中將 image tag 改為 `:v前一版本`（或保持 `:latest` 並 pull 舊版覆蓋）
+3. `docker compose up -d`
+4. Electron installer 回滾：從 GitHub Releases 下載前一版本 `.exe` 重新安裝
 
 ---
 
@@ -356,17 +369,19 @@ docker pull ghcr.io/brucecheng886-png/bruv-ai-backend:v1.0.48  # 前一版本
   [ ] 有新增外部輸入的 endpoint 安全性驗證通過
 
 Docker
-  [ ] frontend dist 已用 Docker 重新 build（非本機直接 build）
-  [ ] backend image build 成功（naming to ... done）
-  [ ] frontend nginx image build 成功（naming to ... done）
+  [ ] frontend dist 已用 Docker 重新 build（4-A 步驟）
+  [ ] CI/CD 正常（gh run list 確認兩個 workflow 成功），或手動 build 3 個 image 成功
 
-發布動作
+發布動作（v1.1.6 起：push tag 觸發 GitHub Actions 自動完成）
   [ ] git commit 完整（含所有相關檔案）
-  [ ] git push origin main
-  [ ] docker push backend image
-  [ ] docker push nginx image
-  [ ] electron npm run dist（installer 已產出）
-  [ ] gh release create 含 .exe 和 .exe.blockmap
+  [ ] electron/package.json 版本號已更新
+  [ ] git tag vX.X.X && git push origin main vX.X.X
+  → GitHub Actions docker-publish 自動：build + push nginx / backend / playwright image
+  → GitHub Actions electron-release 自動：build .exe + gh release create
+
+  手動 fallback（CI/CD 失敗時）：
+  [ ] docker build + push 3 個 image（7-C）
+  [ ] cd electron; npm run build:win -- --publish=always
 ```
 
 ---

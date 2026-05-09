@@ -686,6 +686,32 @@
           </div>
         </div>
 
+        <!-- ── 更新服務 ── -->
+        <div v-if="isElectron" class="settings-section">
+          <div class="section-header">
+            <RefreshCw :size="16" :stroke-width="1.5" class="section-icon" />
+            <span>更新服務</span>
+          </div>
+          <div class="section-body">
+            <div style="margin-bottom:10px;color:#666;font-size:13px;">
+              從 ghcr.io 拉取最新 Docker 映像檔並重啟服務，可取得後端與前端的最新功能更新。
+            </div>
+            <div class="update-status-row">
+              <el-button
+                type="primary"
+                :loading="svcUpdating"
+                :disabled="svcUpdating"
+                @click="doUpdateServices"
+              >
+                拉取最新映像並重啟
+              </el-button>
+            </div>
+            <div v-if="svcUpdateLogs.length" style="margin-top:10px;background:#1a1a2e;color:#c8e6c9;border-radius:6px;padding:10px 12px;font-size:12px;font-family:monospace;max-height:160px;overflow-y:auto;">
+              <div v-for="(line, i) in svcUpdateLogs" :key="i">{{ line }}</div>
+            </div>
+          </div>
+        </div>
+
         <!-- ── 診斷與支援 ── -->
         <div class="settings-section">
           <div class="section-header">
@@ -974,7 +1000,7 @@
 import { ref, onMounted, onActivated, reactive, defineComponent, computed } from 'vue'
 import { useRoute } from 'vue-router'
 import { Refresh, Check, ArrowDown } from '@element-plus/icons-vue'
-import { Layers, FolderOpen, MessageSquare, Network, Puzzle, Settings, Dna, Cpu, Key, Sliders, HardDrive, Database, Bot, User, Link, BookOpen, Mail, Download, Cloud, FileText } from 'lucide-vue-next'
+import { Layers, FolderOpen, MessageSquare, Network, Puzzle, Settings, Dna, Cpu, Key, Sliders, HardDrive, Database, Bot, User, Link, BookOpen, Mail, Download, Cloud, FileText, RefreshCw } from 'lucide-vue-next'
 import { wikiApi, systemSettingsApi, agentSkillsApi, monitoringApi, authApi } from '../api/index.js'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuthStore } from '../stores/auth.js'
@@ -1394,6 +1420,31 @@ async function doDownloadUpdate () {
 
 function doInstallUpdate () {
   window.electronApp?.installUpdate?.()
+}
+
+// ── 更新服務 ──────────────────────────────────────────────────────────
+const svcUpdating = ref(false)
+const svcUpdateLogs = ref([])
+
+async function doUpdateServices () {
+  if (!window.electronApp?.updateServices) return
+  svcUpdating.value = true
+  svcUpdateLogs.value = []
+  window.electronApp.onServicesUpdateLog?.((msg) => {
+    svcUpdateLogs.value.push(msg)
+  })
+  try {
+    const res = await window.electronApp.updateServices()
+    if (res?.ok) {
+      ElMessage.success('服務已更新完成，請重新整理頁面。')
+    } else {
+      ElMessage.error('服務更新失敗：' + (res?.error || '未知錯誤'))
+    }
+  } catch (e) {
+    ElMessage.error('服務更新失敗：' + (e?.message || String(e)))
+  } finally {
+    svcUpdating.value = false
+  }
 }
 
 // ── 診斷報告 ──────────────────────────────────────────────────────────
