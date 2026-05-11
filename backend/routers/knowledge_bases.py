@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from auth import CurrentUser
+from auth import CurrentUser, CurrentAdmin
 from database import get_db
 from models import KnowledgeBase, Document, DocumentKnowledgeBase, Chunk
 
@@ -214,7 +214,7 @@ async def update_knowledge_base(
 @router.delete("/{kb_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_knowledge_base(
     kb_id: str,
-    current_user: CurrentUser = None,
+    current_user: CurrentAdmin,
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(select(KnowledgeBase).where(KnowledgeBase.id == kb_id))

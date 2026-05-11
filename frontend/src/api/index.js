@@ -447,3 +447,14 @@ export const agentSkillsApi = {
   uninstall: (pageKey) =>
     apiFetch(`/api/agent-skills/store/${pageKey}`, { method: 'DELETE', headers: getHeaders(false) }).then(handleResponse),
 }
+
+export const usersApi = {
+  list: () =>
+    apiFetch('/api/auth/users', { headers: getHeaders(false) }).then(handleResponse),
+  create: (body) =>
+    apiFetch('/api/auth/users', { method: 'POST', headers: getHeaders(), body: JSON.stringify(body) }).then(handleResponse),
+  update: (userId, body) =>
+    apiFetch(`/api/auth/users/${userId}`, { method: 'PATCH', headers: getHeaders(), body: JSON.stringify(body) }).then(handleResponse),
+  remove: (userId) =>
+    apiFetch(`/api/auth/users/${userId}`, { method: 'DELETE', headers: getHeaders(false) }).then(handleResponse),
+}

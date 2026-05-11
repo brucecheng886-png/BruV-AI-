@@ -53,7 +53,7 @@ def _minio():
 
 def _qdrant():
     s = _settings()
-    return QdrantClient(host=s.QDRANT_HOST, port=s.QDRANT_PORT)
+    return QdrantClient(host=s.QDRANT_HOST, port=s.QDRANT_PORT, api_key=s.QDRANT_API_KEY or None, https=False)
 
 
 def _neo4j():

@@ -9,14 +9,15 @@ import ssl as _ssl
 from datetime import datetime, timezone, timedelta
 from email.mime.text import MIMEText
 
-from fastapi import APIRouter, HTTPException, status, Depends
+from fastapi import APIRouter, HTTPException, status, Depends, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from auth import create_access_token, hash_password, verify_password, CurrentUser
+from auth import create_access_token, hash_password, verify_password, CurrentUser, CurrentAdmin, create_stepup_token, verify_stepup_token
 from database import get_db
 from models import User, PasswordResetToken, SystemSetting
+from rate_limit import limiter, LOGIN_RATE_LIMIT
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -38,11 +39,15 @@ class LoginResponse(BaseModel):
 
 
 @router.post("/login", response_model=LoginResponse)
-async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)):
+@limiter.limit(LOGIN_RATE_LIMIT)
+async def login(request: Request, body: LoginRequest, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(User).where(User.email == body.email))
     user = result.scalar_one_or_none()
     if user is None or not verify_password(body.password, user.password):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="帳號或密碼錯誤")
+
+    if not getattr(user, "is_active", True):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="此帳號已停用，請聯絡管理員")
 
     token = create_access_token(user.id, user.email, user.role)
     return LoginResponse(access_token=token, user_id=user.id, email=user.email, role=user.role)
@@ -57,6 +62,8 @@ async def get_me(user: CurrentUser):
         "email": user.email,
         "role": user.role,
         "display_name": getattr(user, "display_name", None),
+        "is_active": getattr(user, "is_active", True),
+        "must_change_password": getattr(user, "must_change_password", False),
         "created_at": user.created_at.isoformat() if user.created_at else None,
     }
 
@@ -92,8 +99,8 @@ async def update_me(
         "id": user.id,
         "email": user.email,
         "role": user.role,
-        "display_name": getattr(user, "display_name", None),
-        "created_at": user.created_at.isoformat() if user.created_at else None,
+        "display_name": getattr(user, "display_name", None),        "is_active": getattr(user, "is_active", True),
+        "must_change_password": getattr(user, "must_change_password", False),        "created_at": user.created_at.isoformat() if user.created_at else None,
     }
 
 
@@ -285,3 +292,148 @@ async def reset_password(body: ResetPasswordRequest, db: AsyncSession = Depends(
     record.used = True
     await db.commit()
     return {"message": "密碼已重設，請重新登入"}
+
+
+# ── 管理員使用者管理 CRUD ─────────────────────────────────────
+
+VALID_ROLES = {"admin", "editor", "user", "readonly", "auditor"}
+
+
+def _user_dict(u: User) -> dict:
+    return {
+        "id": u.id,
+        "email": u.email,
+        "display_name": getattr(u, "display_name", None),
+        "role": u.role,
+        "is_active": getattr(u, "is_active", True),
+        "must_change_password": getattr(u, "must_change_password", False),
+        "created_at": u.created_at.isoformat() if u.created_at else None,
+    }
+
+
+@router.get("/users")
+async def list_users(
+    current_admin: CurrentAdmin,
+    db: AsyncSession = Depends(get_db),
+):
+    """列出所有使用者（admin only）。"""
+    result = await db.execute(select(User).order_by(User.created_at))
+    users = result.scalars().all()
+    return [_user_dict(u) for u in users]
+
+
+class CreateUserRequest(BaseModel):
+    email: str
+    password: str = Field(min_length=8)
+    display_name: str | None = None
+    role: str = "user"
+
+
+@router.post("/users", status_code=201)
+async def create_user(
+    body: CreateUserRequest,
+    current_admin: CurrentAdmin,
+    db: AsyncSession = Depends(get_db),
+):
+    """管理員建立新使用者。新帳號預設 must_change_password=True。"""
+    if body.role not in VALID_ROLES:
+        raise HTTPException(status_code=422, detail=f"無效角色，允許值：{', '.join(sorted(VALID_ROLES))}")
+
+    dup = await db.execute(select(User).where(User.email == body.email))
+    if dup.scalar_one_or_none() is not None:
+        raise HTTPException(status_code=409, detail="此 Email 已被使用")
+
+    new_user = User(
+        email=body.email,
+        password=hash_password(body.password),
+        display_name=body.display_name,
+        role=body.role,
+        is_active=True,
+        must_change_password=True,
+    )
+    db.add(new_user)
+    await db.commit()
+    await db.refresh(new_user)
+    return _user_dict(new_user)
+
+
+class UpdateUserRequest(BaseModel):
+    display_name: str | None = None
+    role: str | None = None
+    is_active: bool | None = None
+
+
+@router.patch("/users/{user_id}")
+async def update_user(
+    user_id: str,
+    body: UpdateUserRequest,
+    current_admin: CurrentAdmin,
+    db: AsyncSession = Depends(get_db),
+):
+    """修改使用者角色、display_name 或停用狀態（admin only）。"""
+    target = await db.get(User, user_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail="使用者不存在")
+
+    if body.role is not None:
+        if body.role not in VALID_ROLES:
+            raise HTTPException(status_code=422, detail=f"無效角色，允許值：{', '.join(sorted(VALID_ROLES))}")
+        # 不得降級自己的 admin 角色，避免鎖死
+        if target.id == current_admin.id and body.role != "admin":
+            raise HTTPException(status_code=400, detail="不可降級自己的管理員角色")
+        target.role = body.role
+
+    if body.display_name is not None:
+        target.display_name = body.display_name.strip() or None
+
+    if body.is_active is not None:
+        if target.id == current_admin.id and not body.is_active:
+            raise HTTPException(status_code=400, detail="不可停用自己的帳號")
+        target.is_active = body.is_active
+
+    await db.commit()
+    await db.refresh(target)
+    return _user_dict(target)
+
+
+@router.delete("/users/{user_id}", status_code=204)
+async def delete_user(
+    user_id: str,
+    current_admin: CurrentAdmin,
+    db: AsyncSession = Depends(get_db),
+):
+    """刪除使用者（admin only）。不得刪除自己。"""
+    if user_id == current_admin.id:
+        raise HTTPException(status_code=400, detail="不可刪除自己的帳號")
+
+    target = await db.get(User, user_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail="使用者不存在")
+
+    await db.delete(target)
+    await db.commit()
+
+
+# ── Step-up 驗證 ──────────────────────────────────────────────
+class StepUpRequest(BaseModel):
+    password: str
+
+
+@router.post("/step-up")
+async def step_up(
+    body: StepUpRequest,
+    current_user: CurrentUser,
+    db: AsyncSession = Depends(get_db),
+):
+    """二次身份驗證：輸入密碼後取得 5 分鐘有效的 step-up token。
+    
+    高風險操作（如刪除所有文件、匯出所有資料）前呼叫此端點，
+    取得 step-up token 後以 X-Step-Up-Token header 傳入。
+    """
+    result = await db.execute(select(User).where(User.id == current_user.id))
+    user = result.scalar_one_or_none()
+    if user is None or not verify_password(body.password, user.password):
+        raise HTTPException(status_code=400, detail="密碼錯誤，step-up 驗證失敗")
+
+    token = create_stepup_token(current_user.id)
+    return {"step_up_token": token, "expires_in_seconds": 300}

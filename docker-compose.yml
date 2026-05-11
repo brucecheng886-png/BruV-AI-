@@ -10,6 +10,7 @@
       - backend
     networks:
       - bruv_ai_network
+      - backend-net
     restart: unless-stopped
 
   # ── 資料庫層 ────────────────────────────────────────────────
@@ -27,7 +28,7 @@
     ports:
       - "5432:5432"
     networks:
-      - bruv_ai_network
+      - db-net
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
@@ -39,12 +40,14 @@
   qdrant:
     image: qdrant/qdrant:latest
     container_name: bruv_ai_qdrant
+    environment:
+      QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY}
     volumes:
       - qdrant_data:/qdrant/storage
     ports:
       - "6333:6333"
     networks:
-      - bruv_ai_network
+      - db-net
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "cat /proc/1/status | grep -q Tgid || exit 1"]
@@ -67,7 +70,7 @@
       - "7474:7474"
       - "7687:7687"
     networks:
-      - bruv_ai_network
+      - db-net
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:7474 || exit 1"]
@@ -78,13 +81,13 @@
   redis:
     image: redis:7-alpine
     container_name: bruv_ai_redis
-    command: redis-server --appendonly yes
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
     volumes:
       - redis_data:/data
     ports:
       - "6379:6379"
     networks:
-      - bruv_ai_network
+      - db-net
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -105,7 +108,7 @@
       - "9000:9000"
       - "9001:9001"
     networks:
-      - bruv_ai_network
+      - db-net
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "mc ready local || exit 1"]
@@ -120,9 +123,9 @@
     volumes:
       - ollama_data:/root/.ollama
     ports:
-      - "11434:11434"
+      - "127.0.0.1:11434:11434"
     networks:
-      - bruv_ai_network
+      - backend-net
     restart: unless-stopped
     deploy:
       resources:
@@ -163,7 +166,8 @@
       neo4j:
         condition: service_healthy
     networks:
-      - bruv_ai_network
+      - backend-net
+      - db-net
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8000/api/health || exit 1"]
@@ -193,7 +197,8 @@
       qdrant:
         condition: service_healthy
     networks:
-      - bruv_ai_network
+      - backend-net
+      - db-net
     restart: unless-stopped
 
   playwright-service:
@@ -285,6 +290,10 @@
 networks:
   bruv_ai_network:
     name: bruv_ai_network
+    driver: bridge
+  backend-net:
+    driver: bridge
+  db-net:
     driver: bridge
 
 volumes:

@@ -45,7 +45,7 @@ def _pg_conn():
 def _qdrant():
     from qdrant_client import QdrantClient
     s = _settings()
-    return QdrantClient(host=s.QDRANT_HOST, port=s.QDRANT_PORT)
+    return QdrantClient(host=s.QDRANT_HOST, port=s.QDRANT_PORT, api_key=s.QDRANT_API_KEY or None, https=False)
 
 
 def _neo4j():

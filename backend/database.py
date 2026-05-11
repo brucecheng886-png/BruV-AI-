@@ -81,6 +81,8 @@ def get_qdrant_client() -> AsyncQdrantClient:
         _qdrant_client = AsyncQdrantClient(
             host=settings.QDRANT_HOST,
             port=settings.QDRANT_PORT,
+            api_key=settings.QDRANT_API_KEY or None,
+            https=False,
         )
     return _qdrant_client
 

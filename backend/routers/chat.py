@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from qdrant_client.models import Filter, FieldCondition, MatchValue, MatchAny
 from auth import CurrentUser
+from security import sanitize_query, sanitize_chunk
 from database import get_db, get_qdrant_client
 from models import Conversation, Message, KnowledgeBase, Document
 from services.reranker import get_reranker
@@ -513,7 +514,7 @@ async def _rag_stream(
     chars = 0
     sources = []
     for hit in top_hits:
-        text = hit.payload.get("content", "")
+        text = sanitize_chunk(hit.payload.get("content", ""))
         doc_id = hit.payload.get("doc_id", "")
         page   = hit.payload.get("page_number", "")
         title  = hit.payload.get("title", "")
@@ -1106,6 +1107,11 @@ async def chat_stream(
     if not req.query.strip():
         raise HTTPException(status_code=400, detail="query 不能為空")
 
+    # Prompt injection 防護：清洗使用者 query
+    req.query = sanitize_query(req.query)
+    if not req.query.strip():
+        raise HTTPException(status_code=400, detail="query 內容不合法")
+
     # 若使用者未指定 model，傳 None → llm_stream 會從 DB runtime_config 或 env 自動解析
     # 不可用 settings.OLLAMA_LLM_MODEL 作 fallback，否則會將 Ollama 模型名傳給 OpenAI
     llm_model = req.model or None
@@ -1149,6 +1155,15 @@ async def chat_stream(
     _agent_type = req.agent_type or "chat"
     if req.conversation_id and conv is not None:
         _agent_type = conv.agent_type or "chat"
+
+    # RAG ACL：readonly 角色只能在有 KB 或文件 Scope 限制時才能查詢
+    # 不允許 readonly 用戶進行無任何 scope 的全域知識庫查詢
+    _user_role = getattr(current_user, "role", "user") if current_user else "anonymous"
+    if _user_role == "readonly" and not conv_kb_scope_id and not conv_doc_scope_ids and not (req.doc_ids):
+        raise HTTPException(
+            status_code=403,
+            detail="readonly 角色僅能在指定知識庫或文件範圍內查詢，無法進行全域搜索"
+        )
 
     return StreamingResponse(
         _rag_stream(

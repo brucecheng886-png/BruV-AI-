@@ -15,11 +15,13 @@ class Settings(BaseSettings):
 
     # Redis
     REDIS_URL: str = "redis://redis:6379/0"
+    REDIS_PASSWORD: str = ""
 
     # Qdrant
     QDRANT_HOST: str = "qdrant"
     QDRANT_PORT: int = 6333
     QDRANT_COLLECTION: str = "chunks"
+    QDRANT_API_KEY: str = ""
 
     # Neo4j
     NEO4J_URI: str = "bolt://neo4j:7687"
@@ -70,8 +72,13 @@ class Settings(BaseSettings):
     KB_SIMILARITY_THRESHOLD: float = 0.75
 
     # 應用程式
+    APP_ENV: str = "development"
     DEBUG: bool = False
     CORS_ORIGINS: List[str] = ["http://localhost:3000"]
+
+    @property
+    def is_production(self) -> bool:
+        return self.APP_ENV == "production"
 
     # ── LLM 成本表（USD per 1M tokens）─────────────────────────
     # Phase B6 用：估算 cost = (prompt_tokens / 1M) * input_price + (completion_tokens / 1M) * output_price
@@ -115,3 +122,4 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+print(f"[BruV AI] Running in {settings.APP_ENV} mode")

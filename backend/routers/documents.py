@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-from auth import CurrentUser
+from auth import CurrentUser, require_role
 from database import get_db
 from models import Document, DocumentKnowledgeBase
 from services.storage import upload_file
@@ -31,6 +31,51 @@ ALLOWED_TYPES = {
     "text/csv": "csv",
 }
 MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
+
+# Magic bytes → 允許的 file_type 集合
+_MAGIC_SIGNATURES: list[tuple[bytes, set[str]]] = [
+    (b"%PDF",                       {"pdf"}),
+    (b"PK\x03\x04",                 {"docx", "xlsx"}),   # ZIP-based Office formats
+    (b"\xef\xbb\xbf",               {"txt", "md", "csv", "html"}),  # UTF-8 BOM
+    (b"<!DOCTYPE", {"html"}),
+    (b"<html",                      {"html"}),
+]
+
+
+def _verify_magic_bytes(data: bytes, claimed_file_type: str) -> bool:
+    """驗證 magic bytes 是否與宣告的 file_type 一致。
+    純文字格式（txt/md/csv）沒有強制 magic bytes，僅以 UTF-8 可解碼性驗證。
+    """
+    head = data[:16].lower()
+
+    # PDF
+    if claimed_file_type == "pdf":
+        return data[:4] == b"%PDF"
+
+    # Office Open XML（docx/xlsx 都是 ZIP）
+    if claimed_file_type in ("docx", "xlsx"):
+        return data[:4] == b"PK\x03\x04"
+
+    # HTML
+    if claimed_file_type == "html":
+        stripped = data[:512].lstrip()
+        return stripped[:9].lower() in (b"<!doctype", b"<html", b"<?xml ")  \
+            or stripped[:1] == b"<"
+
+    # txt / md / csv — 只驗 UTF-8 可解碼（防止上傳二進位偽裝成文字）
+    if claimed_file_type in ("txt", "md", "csv"):
+        try:
+            data[:1024].decode("utf-8")
+            return True
+        except UnicodeDecodeError:
+            # 允許 latin-1 等常見文字編碼
+            try:
+                data[:1024].decode("latin-1")
+                return True
+            except Exception:
+                return False
+
+    return True  # 未知類型寬鬆通過
 
 
 class TagSuggestionAction(BaseModel):
@@ -89,6 +134,13 @@ async def upload_document(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"檔案過大（{len(data) // 1024 // 1024} MB），上限 50 MB",
+        )
+
+    # 2b. Magic bytes 驗證（防止 content-type 偽造）
+    if not _verify_magic_bytes(data, file_type):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"檔案內容與宣告類型不符（{file_type}），請確認上傳正確格式",
         )
 
     # 3. 建立 Document 記錄
@@ -1029,7 +1081,7 @@ async def get_document_chunks(
 @router.delete("/{doc_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_document(
     doc_id: str,
-    current_user: CurrentUser = None,
+    current_user=Depends(require_role(["admin", "editor"])),
     db: AsyncSession = Depends(get_db),
 ):
     """軟刪除文件（移入垃圾桶，不實際清除向量 / 原檔）"""
@@ -1065,7 +1117,7 @@ async def restore_document(
 @router.delete("/{doc_id}/permanent", status_code=status.HTTP_204_NO_CONTENT)
 async def permanent_delete_document(
     doc_id: str,
-    current_user: CurrentUser = None,
+    current_user=Depends(require_role(["admin", "editor"])),
     db: AsyncSession = Depends(get_db),
 ):
     """永久刪除文件（含 Qdrant 向量、MinIO 原檔、Neo4j 關係）— Saga 保護"""

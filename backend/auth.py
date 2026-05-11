@@ -79,8 +79,58 @@ async def get_current_admin(user: User = Depends(get_current_user)) -> User:
     return user
 
 
+def require_role(roles: list[str]):
+    """工廠函式：回傳一個只允許指定角色清單的 FastAPI dependency。"""
+    async def _check(user: User = Depends(get_current_user)) -> User:
+        if user.role not in roles:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"此操作需要以下角色之一：{', '.join(roles)}",
+            )
+        return user
+    return _check
+
+
 CurrentUser  = Annotated[User, Depends(get_current_user)]
 CurrentAdmin = Annotated[User, Depends(get_current_admin)]
+
+
+# ── Step-up Token ─────────────────────────────────────────────
+_STEPUP_EXPIRE_MINUTES = 5
+_STEPUP_CLAIM = "stepup"
+
+
+def create_stepup_token(user_id: str) -> str:
+    """建立 5 分鐘有效的 step-up JWT（含特殊 claim）"""
+    expire = datetime.now(timezone.utc) + timedelta(minutes=_STEPUP_EXPIRE_MINUTES)
+    payload = {"sub": user_id, _STEPUP_CLAIM: True, "exp": expire}
+    return jwt.encode(payload, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
+
+
+def verify_stepup_token(token: str, user_id: str) -> bool:
+    """驗證 step-up token 是否有效且屬於指定 user_id"""
+    try:
+        raw = jwt.decode(token, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
+        return raw.get("sub") == user_id and raw.get(_STEPUP_CLAIM) is True
+    except JWTError:
+        return False
+
+
+def require_stepup():
+    """FastAPI dependency：要求 X-Step-Up-Token header 且驗證通過"""
+    async def _check(
+        request,
+        current_user: User = Depends(get_current_user),
+    ) -> User:
+        from fastapi import Request as _Request
+        stepup_token = request.headers.get("X-Step-Up-Token", "")
+        if not stepup_token or not verify_stepup_token(stepup_token, current_user.id):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="此操作需要二次身份驗證，請先取得 step-up token（POST /api/auth/step-up）",
+            )
+        return current_user
+    return _check
 
 
 async def get_optional_user(

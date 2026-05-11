@@ -18,6 +18,19 @@
         <component :is="item.icon" :size="18" :stroke-width="1.5" />
         {{ item.label }}
       </router-link>
+      <template v-if="authStore.userRole === 'admin'">
+        <div class="nav-divider" />
+        <router-link
+          v-for="item in adminNavItems"
+          :key="item.path"
+          :to="item.path"
+          class="nav-item"
+          active-class="nav-active"
+        >
+          <component :is="item.icon" :size="18" :stroke-width="1.5" />
+          {{ item.label }}
+        </router-link>
+      </template>
     </nav>
     <div v-if="appVersion" class="navbar-version" @click="goToUpdateSettings">
       <span class="version-text">v{{ appVersion }}</span>
@@ -39,7 +52,7 @@ import { ref, computed } from 'vue'
 import { useAuthStore } from '../stores/auth.js'
 import { useUpdateStore } from '../stores/update.js'
 import { useRouter } from 'vue-router'
-import { MessageSquare, FolderOpen, Network, Puzzle, Dna, Settings, LogOut, RefreshCw } from 'lucide-vue-next'
+import { MessageSquare, FolderOpen, Network, Puzzle, Dna, Settings, LogOut, RefreshCw, Users } from 'lucide-vue-next'
 
 const authStore = useAuthStore()
 const updateStore = useUpdateStore()
@@ -64,6 +77,10 @@ const navItems = [
   { path: '/plugins',  label: '插件管理',   icon: Puzzle },
   { path: '/protein',  label: '蛋白質圖譜', icon: Dna },
   { path: '/settings', label: '設定 / Wiki', icon: Settings },
+]
+
+const adminNavItems = [
+  { path: '/users', label: '使用者管理', icon: Users },
 ]
 
 function handleLogout() {
@@ -148,6 +165,12 @@ function goToUserSettings() {
   border-radius: 7px;
   margin-bottom: 2px;
   transition: background 0.15s, color 0.15s;
+}
+
+.nav-divider {
+  height: 1px;
+  background: #e2e8f0;
+  margin: 6px 14px;
 }
 
 .nav-item:hover {

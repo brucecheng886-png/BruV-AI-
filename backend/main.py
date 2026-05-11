@@ -8,8 +8,12 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from prometheus_fastapi_instrumentator import Instrumentator
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 
 from config import settings
+from rate_limit import limiter
 from routers import chat, documents, ontology, wiki, agent, plugins, search, health, knowledge_bases
 from routers import auth as auth_router
 from routers import settings_router
@@ -18,6 +22,8 @@ from routers import prompt_engine
 from routers import tags
 from routers import agent_skills
 from routers import monitoring
+from routers import fido2 as fido2_router
+from audit import AuditMiddleware
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +111,11 @@ app = FastAPI(
     redoc_url="/api/redoc",
 )
 
+# ── Rate Limiting ────────────────────────────────────────────
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
+
 # ── CORS ──────────────────────────────────────────────────────
 app.add_middleware(
     CORSMiddleware,
@@ -113,7 +124,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
+# ── Audit Middleware ─────────────────────────────────
+app.add_middleware(AuditMiddleware)
 # ── Prometheus metrics ────────────────────────────────────────
 Instrumentator().instrument(app).expose(app, endpoint="/metrics")
 
@@ -146,3 +158,33 @@ app.include_router(prompt_engine.router,   prefix="/api/prompt-templates", tags=
 app.include_router(tags.router,            prefix="/api/tags",             tags=["tags"])
 app.include_router(agent_skills.router,    prefix="/api/agent-skills",     tags=["agent-skills"])
 app.include_router(monitoring.router,      prefix="/api/monitoring",       tags=["monitoring"])
+app.include_router(fido2_router.router,    prefix="/api/auth/fido2",        tags=["fido2"])
+
+# audit logs 查詢（admin only）
+from fastapi import Depends
+from auth import CurrentAdmin
+from database import AsyncSessionLocal
+from sqlalchemy import select, desc
+from models import AuditLog as _AuditLog
+
+@app.get("/api/audit-logs", tags=["audit"])
+async def get_audit_logs(
+    current_admin: CurrentAdmin,
+    limit: int = 100,
+    offset: int = 0,
+):
+    """稽核日誌查詢（admin only）"""
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(_AuditLog).order_by(desc(_AuditLog.created_at)).offset(offset).limit(limit)
+        )
+        logs = result.scalars().all()
+    return [
+        {
+            "id": l.id, "user_id": l.user_id, "user_email": l.user_email,
+            "action": l.action, "method": l.method, "path": l.path,
+            "ip": l.ip, "status_code": l.status_code,
+            "created_at": l.created_at.isoformat() if l.created_at else None,
+        }
+        for l in logs
+    ]

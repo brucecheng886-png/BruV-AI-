@@ -5,7 +5,7 @@ python-multipart==0.0.12
 httpx==0.27.2
 pydantic>=2.9.2
 pydantic-settings>=2.5.2
-
+slowapi==0.1.9
 # ── 資料庫驅動 ─────────────────────────────────────────
 asyncpg==0.29.0
 psycopg2-binary==2.9.9
@@ -49,7 +49,7 @@ python-jose[cryptography]==3.3.0
 bcrypt>=4.0.1
 # passlib removed: use bcrypt directly (bcrypt 5.x incompatible with passlib)
 RestrictedPython==7.1
-
+webauthn==2.2.0
 # ── 監控 ────────────────────────────────────────────────
 prometheus-fastapi-instrumentator==7.0.0
 

@@ -12,6 +12,7 @@ const routes = [
   { path: '/plugins', component: () => import('../views/PluginsView.vue'), meta: { requiresAuth: true } },
   { path: '/protein', component: () => import('../views/ProteinGraphView.vue'), meta: { requiresAuth: true } },
   { path: '/settings', component: () => import('../views/SettingsView.vue'), meta: { requiresAuth: true } },
+  { path: '/users', component: () => import('../views/UsersView.vue'), meta: { requiresAuth: true, requiresAdmin: true } },
 ]
 
 const router = createRouter({
@@ -42,6 +43,9 @@ router.beforeEach(async (to) => {
       return '/login'
     }
   }
+
+  // admin 專屬路由防護
+  if (to.meta.requiresAdmin && auth.userRole !== 'admin') return '/chat'
 
   return true
 })

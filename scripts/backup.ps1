@@ -26,6 +26,10 @@ try {
     docker exec bruv_ai_postgres sh -c `
         "pg_dump -U `$POSTGRES_USER `$POSTGRES_DB | gzip" | `
         Set-Content -AsByteStream $PgFile
+    # 7-Zip 加密壓縮
+    & 7z a "-p$env:BACKUP_PASSWORD" -mhe=on "$PgFile.7z" $PgFile | Out-Null
+    Remove-Item $PgFile -Force
+    $PgFile = "$PgFile.7z"
     Write-Host "      ✅ PG 備份完成: $PgFile"
 } catch {
     Write-Warning "      ❌ PG 備份失敗: $_"
@@ -49,6 +53,11 @@ try {
                           -OutFile $dest
         Write-Host "      ✅ Qdrant $name 備份完成"
     }
+    # 7-Zip 加密壓縮整個 snapshot 目錄
+    $QdrantArchive = Join-Path $BackupDir "qdrant_snapshots_$Timestamp.7z"
+    & 7z a "-p$env:BACKUP_PASSWORD" -mhe=on $QdrantArchive $QdrantSnapshotDir | Out-Null
+    Remove-Item $QdrantSnapshotDir -Recurse -Force
+    Write-Host "      ✅ Qdrant 加密完成: $QdrantArchive"
 } catch {
     Write-Warning "      ❌ Qdrant 備份失敗: $_"
 }
@@ -60,6 +69,10 @@ try {
     # Neo4j CE 使用 neo4j-admin database dump（需先停止資料庫或使用 online backup）
     docker exec bruv_ai_neo4j neo4j-admin database dump neo4j --to-stdout 2>$null | `
         Set-Content -AsByteStream $Neo4jFile
+    # 7-Zip 加密壓縮
+    & 7z a "-p$env:BACKUP_PASSWORD" -mhe=on "$Neo4jFile.7z" $Neo4jFile | Out-Null
+    Remove-Item $Neo4jFile -Force
+    $Neo4jFile = "$Neo4jFile.7z"
     Write-Host "      ✅ Neo4j 備份完成: $Neo4jFile"
 } catch {
     Write-Warning "      ❌ Neo4j 備份失敗（CE 版不支援 online dump，請參考文件）: $_"
