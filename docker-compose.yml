@@ -122,8 +122,6 @@
     container_name: bruv_ai_ollama
     volumes:
       - ollama_data:/root/.ollama
-    ports:
-      - "127.0.0.1:11434:11434"
     networks:
       - backend-net
     restart: unless-stopped

@@ -153,7 +153,7 @@ const REQUIRED_PORTS = [
   { port: 6379,  name: 'Redis' },
   { port: 7474,  name: 'Neo4j HTTP' },
   { port: 7687,  name: 'Neo4j Bolt' },
-  { port: 11434, name: 'Ollama' },
+  // Port 11434 (Ollama) 由 Docker 容器自行使用，不列入衝突偵測
 ]
 function checkPortFree (port) {
   return new Promise((resolve) => {
@@ -1374,15 +1374,15 @@ function setupSetupIPC (setupCompleteFile) {
     })
   })
 
-  // ── Step 6: 檢查模型是否已在 Docker Ollama 容器內 ──
+  // ── Step 6: 檢查模型是否已在 Docker Ollama 容器內（透過 docker exec，不依賴 host port）──
   ipcMain.handle('setup:checkDockerOllamaModel', async (_, modelName) => {
     try {
-      const resp = await fetch('http://localhost:11434/api/tags')
-      if (!resp.ok) return { success: false, installed: false }
-      const data = await resp.json()
-      const models = data.models || []
+      const out = await runCommand('docker exec bruv_ai_ollama ollama list', 8000)
       const baseName = modelName.split(':')[0]
-      const installed = models.some(m => m.name === modelName || m.name.startsWith(baseName))
+      const installed = out.split(/\r?\n/).some(line => {
+        const name = line.trim().split(/\s+/)[0]
+        return name === modelName || name.startsWith(baseName + ':') || name.split(':')[0] === baseName
+      })
       return { success: true, installed }
     } catch (e) {
       return { success: false, installed: false, error: e.message }
