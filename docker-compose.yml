@@ -121,7 +121,7 @@
     image: ollama/ollama:latest
     container_name: bruv_ai_ollama
     volumes:
-      - ollama_data:/root/.ollama
+      - ${OLLAMA_MODELS_PATH:-ollama_data}:/root/.ollama
     networks:
       - backend-net
     restart: unless-stopped

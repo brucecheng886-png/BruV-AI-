@@ -1221,20 +1221,6 @@ function setupSetupIPC (setupCompleteFile) {
       checks.push({ key: 'disk', label: '磁碟空間', detail: '無法取得', status: 'warn' })
     }
 
-    // 虛擬化支援檢查
-    try {
-      const virtRaw = await runCommand('wmic cpu get VirtualizationFirmwareEnabled /format:csv', 8000)
-      const enabled = virtRaw.toLowerCase().includes('true')
-      checks.push({
-        key: 'virt',
-        label: '虛擬化（VT-x/AMD-V）',
-        detail: enabled ? '已啟用（BIOS）' : '未偵測到（若 Docker 可正常執行則可忽略）',
-        status: enabled ? 'ok' : 'warn',
-      })
-    } catch {
-      checks.push({ key: 'virt', label: '虛擬化（VT-x/AMD-V）', detail: '無法偵測', status: 'warn' })
-    }
-
     // 網路連線檢查
     try {
       await runCommand('ping -n 1 -w 3000 8.8.8.8', 6000)
@@ -1475,6 +1461,19 @@ function setupSetupIPC (setupCompleteFile) {
     }
 
     // 用 spawn 串流 stdout/stderr，即時傳給前端顯示
+    // ── 自動偵測原生 Ollama 模型目錄，避免重複下載 9GB ──────────────────
+    try {
+      await runCommand('ollama --version', 5000)
+      // 原生 Ollama 已安裝：將其模型目錄掛載給 Docker Ollama 使用
+      const ollamaModelsDir = (process.env.OLLAMA_MODELS || (require('os').homedir() + '\\.ollama'))
+        .replace(/\\/g, '/') // Docker bind mount 需要正斜線
+      updateEnvFile(envPath, { OLLAMA_MODELS_PATH: ollamaModelsDir })
+      event.sender.send('setup:dockerLog', `偵測到原生 Ollama，模型目錄：${ollamaModelsDir}`)
+      event.sender.send('setup:dockerLog', 'Docker Ollama 將共用同一目錄，無需重複下載模型。')
+    } catch {
+      // 原生 Ollama 未安裝，使用獨立 Docker volume（不寫入 OLLAMA_MODELS_PATH）
+    }
+    // ───────────────────────────────────────────────────────────────────────
     const upArgs = ['compose', '-p', COMPOSE_PROJECT, '-f', composePath]
     if (gpuOverridePath) upArgs.push('-f', gpuOverridePath)
     upArgs.push('--env-file', envPath, 'up', '-d', '--pull', 'always', '--remove-orphans')

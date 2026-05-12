@@ -260,6 +260,12 @@
     .model-tag.done     { background: rgba(16,185,129,0.15); color: var(--success); }
     .model-tag.error    { background: rgba(239,68,68,0.15); color: var(--error); }
     .model-tag.skipped  { background: rgba(245,158,11,0.15); color: var(--warn); }
+    .model-tag.not-running { background: rgba(148,163,184,0.1); color: var(--text-muted); }
+    .model-target-row {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 5px 0; border-top: 1px solid rgba(255,255,255,0.06); margin-top: 4px;
+    }
+    .model-target-label { font-size: 12px; color: var(--text-muted); }
     .model-log {
       font-size: 11px; color: var(--text-muted);
       margin-top: 4px; min-height: 16px;
@@ -640,9 +646,14 @@
           <div class="model-name">qwen2.5:14b</div>
           <div class="model-size">主要語言模型  /  約 9 GB</div>
         </div>
-        <div style="display:flex; align-items:center; gap:8px;">
-          <span class="model-tag pending" id="model-tag-qwen">待下載</span>
-        </div>
+      </div>
+      <div class="model-target-row">
+        <span class="model-target-label">本機 Ollama</span>
+        <span class="model-tag pending" id="model-tag-native-qwen">偵測中...</span>
+      </div>
+      <div class="model-target-row">
+        <span class="model-target-label">Docker Ollama</span>
+        <span class="model-tag pending" id="model-tag-docker-qwen">偵測中...</span>
       </div>
       <div class="progress-wrap" id="progress-wrap-qwen" style="display:none">
         <div class="progress-label">
@@ -843,7 +854,7 @@
 
   // 注意：bge-m3 不在 Step 4 管理（它必須安裝到 Docker Ollama 容器內，由 Step 6 pullEmbeddingModel 做真實檢查和安裝）
   const modelState = {
-    'qwen2.5:14b': { status: 'pending', percent: 0 }
+    'qwen2.5:14b': { nativeStatus: 'pending', dockerStatus: 'pending', percent: 0 }
   }
 
   // Step 5 暫存的管理員帳密，Step 6 後端就緒後傳給 init-admin
@@ -960,11 +971,12 @@
     el.className = `status-icon ${type}`
   }
 
-  function setModelTag (modelKey, status) {
-    const safeKey = modelKey.replace(/[:.]/g, '-')
-    const tag = document.getElementById(`model-tag-${safeKey === 'qwen2.5-14b' ? 'qwen' : 'bge'}`)
+  function setModelTag (modelKey, status, target = 'native') {
+    // target: 'native' | 'docker'
+    const id = target === 'docker' ? 'model-tag-docker-qwen' : 'model-tag-native-qwen'
+    const tag = document.getElementById(id)
     if (!tag) return
-    const labels = { pending: '待下載', dl: '下載中', done: '已完成', error: '下載失敗', skipped: '已略過' }
+    const labels = { pending: '待下載', checking: '偵測中...', dl: '下載中', done: '已完成', error: '下載失敗', skipped: '已略過', 'not-running': '容器未啟動' }
     tag.className = `model-tag ${status}`
     tag.textContent = labels[status] || status
   }
@@ -1113,32 +1125,41 @@
         label.textContent = 'Ollama 已安裝'
         sub.textContent   = result.version || ''
         document.getElementById('model-section').style.display = 'block'
-        // 主動偵測已下載的模型，已存在就標記為 done
+        // ── 本機 Ollama 模型偵測（獨立路徑）──
         try {
           const list = await window.setupBridge.listOllamaModels()
           if (list && list.success && Array.isArray(list.models)) {
-            const has = (target) => list.models.some(m => m === target || m.startsWith(target + ':') || target.startsWith(m + ':') || m.split(':')[0] === target.split(':')[0])
-            // 只檢查 qwen2.5:14b：bge-m3 必須安裝到 Docker Ollama （Step 6），不在此檢查
+            const has = (t) => list.models.some(m => m === t || m.startsWith(t + ':') || t.startsWith(m + ':') || m.split(':')[0] === t.split(':')[0])
             if (has('qwen2.5:14b')) {
-              modelState['qwen2.5:14b'].status  = 'done'
+              modelState['qwen2.5:14b'].nativeStatus = 'done'
               modelState['qwen2.5:14b'].percent = 100
-              setModelTag('qwen2.5:14b', 'done')
-              const fill = document.getElementById('progress-fill-qwen')
-              const pct  = document.getElementById('progress-pct-qwen')
-              const wrap = document.getElementById('progress-wrap-qwen')
-              const text = document.getElementById('progress-text-qwen')
-              if (fill) fill.style.width = '100%'
-              if (pct)  pct.textContent  = '100%'
-              if (wrap) wrap.style.display = 'block'
-              if (text) text.textContent = '已安裝（自動偵測）'
+              setModelTag('qwen2.5:14b', 'done', 'native')
+            } else {
+              setModelTag('qwen2.5:14b', 'pending', 'native')
             }
           }
-        } catch {}
+        } catch {
+          setModelTag('qwen2.5:14b', 'pending', 'native')
+        }
+        // ── Docker Ollama 模型偵測（獨立路徑，容器未啟動時不阻塞流程）──
+        try {
+          setModelTag('qwen2.5:14b', 'checking', 'docker')
+          const dockerCheck = await window.setupBridge.checkDockerOllamaModel('qwen2.5:14b')
+          if (dockerCheck.installed) {
+            modelState['qwen2.5:14b'].dockerStatus = 'done'
+            setModelTag('qwen2.5:14b', 'done', 'docker')
+          } else {
+            modelState['qwen2.5:14b'].dockerStatus = 'pending'
+            setModelTag('qwen2.5:14b', 'pending', 'docker')
+          }
+        } catch {
+          modelState['qwen2.5:14b'].dockerStatus = 'not-running'
+          setModelTag('qwen2.5:14b', 'not-running', 'docker')
+        }
         refreshModelNext()
-        // 自動下載 qwen2.5:14b（如果未安裝）
-        // bge-m3 不在此下載：它屬於 Docker Ollama，會在 Step 6 容器啟動後做真實檢查和安裝
+        // 自動開始下載（本機未安裝時）
         ;(async () => {
-          if (modelState['qwen2.5:14b'].status !== 'done') await pullModel('qwen2.5:14b')
+          if (modelState['qwen2.5:14b'].nativeStatus !== 'done') await pullModel('qwen2.5:14b')
         })()
       } else {
         if (progBar)    progBar.style.display    = 'none'
@@ -1160,65 +1181,78 @@
 
   async function pullModel (modelName) {
     const id = modelId(modelName)
-
-    // Disable buttons during download (may not exist in auto-download mode)
-    const _btnDlStart = document.getElementById(`btn-dl-${id}`)
-    if (_btnDlStart) _btnDlStart.disabled = true
-    const _skipBtnStart = document.getElementById(`btn-skip-${id}`)
-    if (_skipBtnStart) _skipBtnStart.disabled = true
-    document.querySelectorAll('[id^="btn-dl-"]').forEach(b => b.disabled = true)
-
-    modelState[modelName].status  = 'downloading'
-    modelState[modelName].percent = 0
-    setModelTag(modelName, 'dl')
     document.getElementById(`progress-wrap-${id}`).style.display = 'block'
+    modelState[modelName].percent = 0
 
-    const result = await window.setupBridge.pullOllamaModel(modelName)
-    if (result.success) {
-      modelState[modelName].status  = 'done'
-      modelState[modelName].percent = 100
-      setModelTag(modelName, 'done')
-      document.getElementById(`progress-fill-${id}`).style.width = '100%'
-      document.getElementById(`progress-pct-${id}`).textContent  = '100%'
-      document.getElementById(`progress-text-${id}`).textContent = '下載完成'
-    } else {
-      modelState[modelName].status = 'error'
-      setModelTag(modelName, 'error')
-      document.getElementById(`model-log-${id}`).textContent =
-        result.error || '下載失敗，請稍後重試'
-      const _btnDlErr = document.getElementById(`btn-dl-${id}`)
-      if (_btnDlErr) _btnDlErr.disabled = false
-      const _skipBtnErr = document.getElementById(`btn-skip-${id}`)
-      if (_skipBtnErr) _skipBtnErr.disabled = false
+    // ── 1. 下載至本機 Ollama（若尚未安裝）──
+    if (modelState[modelName].nativeStatus !== 'done') {
+      modelState[modelName].nativeStatus = 'downloading'
+      setModelTag(modelName, 'dl', 'native')
+      document.getElementById(`progress-fill-${id}`).style.width = '0%'
+      document.getElementById(`progress-pct-${id}`).textContent  = '0%'
+      document.getElementById(`progress-text-${id}`).textContent = '下載至本機 Ollama...'
+      const nativeResult = await window.setupBridge.pullOllamaModel(modelName)
+      if (nativeResult.success) {
+        modelState[modelName].nativeStatus = 'done'
+        modelState[modelName].percent = 100
+        setModelTag(modelName, 'done', 'native')
+        document.getElementById(`progress-fill-${id}`).style.width = '100%'
+        document.getElementById(`progress-pct-${id}`).textContent  = '100%'
+        document.getElementById(`progress-text-${id}`).textContent = '本機 Ollama 完成'
+      } else {
+        modelState[modelName].nativeStatus = 'error'
+        setModelTag(modelName, 'error', 'native')
+        document.getElementById(`model-log-${id}`).textContent = nativeResult.error || '本機下載失敗，請稍後重試'
+        refreshModelNext()
+        return
+      }
     }
 
-    // Re-enable the other model's button
-    const otherId = id === 'qwen' ? 'bge' : 'qwen'
-    const otherModel = id === 'qwen' ? 'bge-m3' : 'qwen2.5:14b'
-    if (modelState[otherModel].status === 'pending' ||
-        modelState[otherModel].status === 'error') {
-      const _btnDlOther = document.getElementById(`btn-dl-${otherId}`)
-      if (_btnDlOther) _btnDlOther.disabled = false
-      const _skipBtnOther = document.getElementById(`btn-skip-${otherId}`)
-      if (_skipBtnOther) _skipBtnOther.disabled = false
+    // ── 2. 下載至 Docker Ollama（若容器已啟動且尚未安裝）──
+    const ds = modelState[modelName].dockerStatus
+    if (ds !== 'done' && ds !== 'not-running') {
+      modelState[modelName].dockerStatus = 'downloading'
+      setModelTag(modelName, 'dl', 'docker')
+      document.getElementById(`progress-fill-${id}`).style.width = '0%'
+      document.getElementById(`progress-pct-${id}`).textContent  = '0%'
+      document.getElementById(`progress-text-${id}`).textContent = '下載至 Docker Ollama...'
+      try {
+        const dockerResult = await window.setupBridge.pullDockerOllamaModel(modelName)
+        if (dockerResult.success) {
+          modelState[modelName].dockerStatus = 'done'
+          setModelTag(modelName, 'done', 'docker')
+          document.getElementById(`progress-fill-${id}`).style.width = '100%'
+          document.getElementById(`progress-pct-${id}`).textContent  = '100%'
+          document.getElementById(`progress-text-${id}`).textContent = '下載完成'
+        } else {
+          modelState[modelName].dockerStatus = 'error'
+          setModelTag(modelName, 'error', 'docker')
+        }
+      } catch {
+        // 容器未啟動，非阻塞錯誤
+        modelState[modelName].dockerStatus = 'not-running'
+        setModelTag(modelName, 'not-running', 'docker')
+      }
     }
 
     refreshModelNext()
   }
 
   function skipModel (modelName) {
-    if (modelState[modelName].status === 'downloading') return
-    modelState[modelName].status = 'skipped'
+    if (modelState[modelName].nativeStatus === 'downloading') return
+    modelState[modelName].nativeStatus = 'skipped'
     const id = modelId(modelName)
-    setModelTag(modelName, 'skipped')
-    document.getElementById(`btn-dl-${id}`).disabled   = false
-    document.getElementById(`btn-skip-${id}`).disabled = true
+    setModelTag(modelName, 'skipped', 'native')
+    const _btnDl   = document.getElementById(`btn-dl-${id}`)
+    const _btnSkip = document.getElementById(`btn-skip-${id}`)
+    if (_btnDl)   _btnDl.disabled   = false
+    if (_btnSkip) _btnSkip.disabled = true
     refreshModelNext()
   }
 
   function refreshModelNext () {
-    // 只檢查 qwen2.5:14b：bge-m3 由 Step 6 Docker Ollama 負責，不在此判斷
-    const canNext = modelState['qwen2.5:14b'].status === 'done'
+    // 本機 Ollama 安裝完成即可繼續；Docker Ollama 在此為資訊性顯示，不阻塞下一步
+    const canNext = modelState['qwen2.5:14b'].nativeStatus === 'done'
     document.getElementById('btn-model-next').disabled = !canNext
   }
 

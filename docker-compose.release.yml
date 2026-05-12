@@ -120,7 +120,7 @@ services:
     image: ollama/ollama:latest
     container_name: bruv_ai_ollama
     volumes:
-      - ollama_data:/root/.ollama
+      - ${OLLAMA_MODELS_PATH:-ollama_data}:/root/.ollama
     ports:
       - "11434:11434"
     networks:
