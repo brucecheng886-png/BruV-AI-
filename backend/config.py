@@ -36,7 +36,7 @@ class Settings(BaseSettings):
 
     # Ollama（本地）
     OLLAMA_BASE_URL: str = "http://ollama:11434"
-    OLLAMA_LLM_MODEL: str = "qwen2.5:14b"
+    OLLAMA_LLM_MODEL: str = "qwen2.5:latest"
     OLLAMA_EMBED_MODEL: str = "bge-m3"
 
     # LLM Provider 切換

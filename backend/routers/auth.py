@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import create_access_token, hash_password, verify_password, CurrentUser, CurrentAdmin, create_stepup_token, verify_stepup_token
 from database import get_db
-from models import User, PasswordResetToken, SystemSetting
+from models import User, PasswordResetToken, SystemSetting, InviteToken
 from rate_limit import limiter, LOGIN_RATE_LIMIT
 
 router = APIRouter()
@@ -412,6 +412,181 @@ async def delete_user(
 
     await db.delete(target)
     await db.commit()
+
+
+@router.get("/users/{user_id}/kb-permissions")
+async def get_user_kb_permissions(
+    user_id: str,
+    current_admin: CurrentAdmin,
+    db: AsyncSession = Depends(get_db),
+):
+    """取得指定使用者可存取的所有 KB（admin only）。"""
+    from models import KBPermission, KnowledgeBase
+    result = await db.execute(
+        select(KBPermission, KnowledgeBase.name)
+        .join(KnowledgeBase, KnowledgeBase.id == KBPermission.kb_id)
+        .where(KBPermission.user_id == user_id)
+    )
+    return [
+        {"kb_id": perm.kb_id, "kb_name": kb_name, "permission": perm.permission}
+        for perm, kb_name in result.all()
+    ]
+
+
+# ── 邀請機制 ──────────────────────────────────────────────────
+class InviteCreateRequest(BaseModel):
+    email: str | None = None          # 預填 email（可空）
+    role: str = "user"
+    expires_days: int = Field(default=7, ge=1, le=90)
+
+
+class InviteOut(BaseModel):
+    id: str
+    email: str | None
+    role: str
+    expires_at: str
+    used_at: str | None
+    created_at: str
+    token: str | None = None          # 只在建立時回傳明文 token
+
+
+@router.post("/invite", status_code=201)
+async def create_invite(
+    body: InviteCreateRequest,
+    current_admin: CurrentAdmin,
+    db: AsyncSession = Depends(get_db),
+):
+    """管理員產生邀請連結，回傳包含明文 token 的 URL。"""
+    if body.role not in VALID_ROLES:
+        raise HTTPException(status_code=400, detail=f"無效角色，允許：{sorted(VALID_ROLES)}")
+
+    raw_token = secrets.token_urlsafe(32)
+    expires_at = datetime.now(timezone.utc) + timedelta(days=body.expires_days)
+
+    invite = InviteToken(
+        token=raw_token,
+        email=body.email,
+        role=body.role,
+        created_by=current_admin.id,
+        expires_at=expires_at,
+    )
+    db.add(invite)
+    await db.commit()
+    await db.refresh(invite)
+
+    return {
+        "id": invite.id,
+        "email": invite.email,
+        "role": invite.role,
+        "expires_at": invite.expires_at.isoformat(),
+        "created_at": invite.created_at.isoformat(),
+        "token": raw_token,
+    }
+
+
+@router.get("/invites", response_model=list[InviteOut])
+async def list_invites(
+    current_admin: CurrentAdmin,
+    db: AsyncSession = Depends(get_db),
+):
+    """列出所有邀請 Token（admin only）。"""
+    result = await db.execute(
+        select(InviteToken).order_by(InviteToken.created_at.desc())
+    )
+    invites = result.scalars().all()
+    return [
+        InviteOut(
+            id=inv.id,
+            email=inv.email,
+            role=inv.role,
+            expires_at=inv.expires_at.isoformat(),
+            used_at=inv.used_at.isoformat() if inv.used_at else None,
+            created_at=inv.created_at.isoformat(),
+        )
+        for inv in invites
+    ]
+
+
+@router.delete("/invites/{invite_id}", status_code=204)
+async def revoke_invite(
+    invite_id: str,
+    current_admin: CurrentAdmin,
+    db: AsyncSession = Depends(get_db),
+):
+    """撤銷邀請 Token（admin only）。"""
+    invite = await db.get(InviteToken, invite_id)
+    if not invite:
+        raise HTTPException(status_code=404, detail="邀請不存在")
+    await db.delete(invite)
+    await db.commit()
+
+
+@router.get("/invite/{token}")
+async def get_invite_info(
+    token: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """查詢邀請 Token 的詳情（公開端點，供邀請頁面顯示）。"""
+    result = await db.execute(select(InviteToken).where(InviteToken.token == token))
+    invite = result.scalar_one_or_none()
+    if not invite:
+        raise HTTPException(status_code=404, detail="邀請連結無效")
+    now = datetime.now(timezone.utc)
+    if invite.expires_at < now:
+        raise HTTPException(status_code=410, detail="邀請連結已過期")
+    if invite.used_at is not None:
+        raise HTTPException(status_code=409, detail="此邀請連結已被使用")
+    return {
+        "email": invite.email,
+        "role": invite.role,
+        "expires_at": invite.expires_at.isoformat(),
+    }
+
+
+class RegisterViaInviteRequest(BaseModel):
+    token: str
+    email: str
+    password: str
+    display_name: str | None = None
+
+
+@router.post("/register-via-invite", status_code=201)
+async def register_via_invite(
+    body: RegisterViaInviteRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """使用邀請 Token 自助完成使用者註冊（公開端點）。"""
+    result = await db.execute(select(InviteToken).where(InviteToken.token == body.token))
+    invite = result.scalar_one_or_none()
+    if not invite:
+        raise HTTPException(status_code=404, detail="邀請連結無效")
+    now = datetime.now(timezone.utc)
+    if invite.expires_at < now:
+        raise HTTPException(status_code=410, detail="邀請連結已過期")
+    if invite.used_at is not None:
+        raise HTTPException(status_code=409, detail="此邀請連結已被使用")
+
+    # 若邀請有預填 email，強制使用該 email
+    target_email = invite.email if invite.email else body.email
+    existing = (await db.execute(select(User).where(User.email == target_email))).scalar_one_or_none()
+    if existing:
+        raise HTTPException(status_code=409, detail="此 Email 已被使用")
+
+    user = User(
+        email=target_email,
+        password=hash_password(body.password),
+        role=invite.role,
+        display_name=body.display_name,
+        is_active=True,
+        must_change_password=False,
+    )
+    db.add(user)
+    await db.flush()  # 取得 user.id
+
+    invite.used_at = now
+    invite.used_by = user.id
+    await db.commit()
+    return {"email": user.email, "role": user.role}
 
 
 # ── Step-up 驗證 ──────────────────────────────────────────────

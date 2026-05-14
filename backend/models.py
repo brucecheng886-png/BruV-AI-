@@ -355,3 +355,58 @@ class AuditLog(Base):
     status_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
     detail: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+
+class DocumentAccessLog(Base):
+    """文件存取日誌：記錄每一次文件瀏覽或下載動作"""
+    __tablename__ = "document_access_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    document_id: Mapped[str | None] = mapped_column(
+        ForeignKey("documents.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    action: Mapped[str] = mapped_column(String(10), nullable=False)  # "view" | "download"
+    accessed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
+    ip_address: Mapped[str | None] = mapped_column(String(45), nullable=True)
+
+
+class KBPermission(Base):
+    """知識庫存取權限：控制非管理員使用者可以讀取哪些知識庫"""
+    __tablename__ = "kb_permissions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    kb_id: Mapped[str] = mapped_column(
+        ForeignKey("knowledge_bases.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    permission: Mapped[str] = mapped_column(String(20), nullable=False, default="read")  # "read" | "write"
+    granted_by: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    granted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class InviteToken(Base):
+    """邀請 Token：管理員產生邀請連結，讓新使用者自助註冊"""
+    __tablename__ = "invite_tokens"
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=_uuid)
+    token: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
+    email: Mapped[str | None] = mapped_column(String(255), nullable=True)   # 預填 email，可空
+    role: Mapped[str] = mapped_column(String(20), nullable=False, default="user")
+    created_by: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    used_by: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

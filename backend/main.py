@@ -60,8 +60,8 @@ async def lifespan(app: FastAPI):
             ("ALTER TABLE knowledge_bases ADD COLUMN IF NOT EXISTS agent_prompt TEXT", {}),
             ("ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name VARCHAR(100)", {}),
             (
-                "INSERT INTO users (id, email, password, role) "
-                "VALUES (gen_random_uuid(), :em, :pw, 'admin') "
+                "INSERT INTO users (id, email, password, role, is_active, must_change_password) "
+                "VALUES (gen_random_uuid(), :em, :pw, 'admin', TRUE, FALSE) "
                 "ON CONFLICT (email) DO NOTHING",
                 {"em": "admin@local", "pw": "$2b$12$placeholder_hash_change_on_deploy"},
             ),

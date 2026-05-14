@@ -611,6 +611,202 @@
         </div>
       </template>
 
+      <!-- ── 使用者管理（admin only）──────────────────────────────────── -->
+      <template v-if="activeGroup === 'admin'">
+
+        <!-- 使用者列表 -->
+        <div class="settings-section">
+          <div class="section-header">
+            <User :size="16" :stroke-width="1.5" class="section-icon" />
+            <span>使用者列表</span>
+            <el-button
+              type="primary" size="small" style="margin-left:auto;"
+              @click="createUserDialogVisible = true"
+            >新增使用者</el-button>
+          </div>
+          <div class="section-body">
+            <el-table :data="adminUsers" v-loading="adminUsersLoading" style="width:100%;" size="small">
+              <el-table-column prop="email" label="Email" min-width="200" />
+              <el-table-column label="角色" width="170">
+                <template #default="{ row }">
+                  <el-select
+                    :model-value="row.role"
+                    size="small"
+                    style="width:130px;"
+                    :disabled="row.id === authStore.userId"
+                    @change="val => updateUserRole(row, val)"
+                  >
+                    <el-option v-for="r in ROLE_OPTIONS" :key="r" :label="r" :value="r" />
+                  </el-select>
+                </template>
+              </el-table-column>
+              <el-table-column label="狀態" width="100">
+                <template #default="{ row }">
+                  <el-switch
+                    :model-value="row.is_active"
+                    :disabled="row.id === authStore.userId"
+                    @change="toggleUserActive(row)"
+                  />
+                </template>
+              </el-table-column>
+              <el-table-column label="知識庫存取" width="120">
+                <template #default="{ row }">
+                  <el-button size="small" @click="openKbPermDialog(row)">設定</el-button>
+                </template>
+              </el-table-column>
+              <el-table-column label="操作" width="80">
+                <template #default="{ row }">
+                  <el-button
+                    size="small" type="danger" plain
+                    :disabled="row.id === authStore.userId"
+                    @click="confirmDeleteUser(row)"
+                  >刪除</el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+          </div>
+        </div>
+
+        <!-- 邀請連結 -->
+        <div class="settings-section">
+          <div class="section-header">
+            <Link :size="16" :stroke-width="1.5" class="section-icon" />
+            <span>邀請新使用者</span>
+            <el-button
+              type="primary" size="small" style="margin-left:auto;"
+              @click="inviteDialogVisible = true; generatedInviteLink = ''"
+            >產生邀請連結</el-button>
+          </div>
+          <div class="section-body">
+            <el-table :data="adminInvites" size="small" style="width:100%;">
+              <el-table-column prop="email" label="Email（預填）" min-width="180">
+                <template #default="{ row }">{{ row.email || '（任意 Email）' }}</template>
+              </el-table-column>
+              <el-table-column prop="role" label="角色" width="110" />
+              <el-table-column label="到期" width="200">
+                <template #default="{ row }">{{ new Date(row.expires_at).toLocaleString() }}</template>
+              </el-table-column>
+              <el-table-column label="狀態" width="90">
+                <template #default="{ row }">
+                  <el-tag :type="row.used_at ? 'info' : 'success'" size="small">
+                    {{ row.used_at ? '已使用' : '未使用' }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="操作" width="80">
+                <template #default="{ row }">
+                  <el-button
+                    size="small" type="danger" plain
+                    :disabled="!!row.used_at"
+                    @click="confirmRevokeInvite(row)"
+                  >撤銷</el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+          </div>
+        </div>
+
+        <!-- 新增使用者 dialog -->
+        <el-dialog v-model="createUserDialogVisible" title="新增使用者" width="400px">
+          <el-form :model="createUserForm" label-width="80px">
+            <el-form-item label="Email">
+              <el-input v-model="createUserForm.email" placeholder="user@example.com" />
+            </el-form-item>
+            <el-form-item label="密碼">
+              <el-input v-model="createUserForm.password" type="password" show-password placeholder="至少 8 字元" />
+            </el-form-item>
+            <el-form-item label="顯示名稱">
+              <el-input v-model="createUserForm.display_name" placeholder="選填" />
+            </el-form-item>
+            <el-form-item label="角色">
+              <el-select v-model="createUserForm.role" style="width:130px;">
+                <el-option v-for="r in ROLE_OPTIONS" :key="r" :label="r" :value="r" />
+              </el-select>
+            </el-form-item>
+          </el-form>
+          <template #footer>
+            <el-button @click="createUserDialogVisible = false">取消</el-button>
+            <el-button type="primary" :loading="createUserSaving" @click="submitCreateUser">建立</el-button>
+          </template>
+        </el-dialog>
+
+        <!-- 邀請連結 dialog -->
+        <el-dialog v-model="inviteDialogVisible" title="產生邀請連結" width="440px">
+          <el-form :model="inviteForm" label-width="90px">
+            <el-form-item label="Email（選填）">
+              <el-input v-model="inviteForm.email" placeholder="預填給被邀請人，可留空" />
+            </el-form-item>
+            <el-form-item label="角色">
+              <el-select v-model="inviteForm.role" style="width:130px;">
+                <el-option v-for="r in ROLE_OPTIONS" :key="r" :label="r" :value="r" />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="有效天數">
+              <el-input-number v-model="inviteForm.expires_days" :min="1" :max="90" />
+            </el-form-item>
+          </el-form>
+          <div v-if="generatedInviteLink" style="margin-top:12px;">
+            <el-alert title="邀請連結已產生（請複製後傳送給對方）" type="success" show-icon :closable="false" />
+            <div style="display:flex;gap:8px;margin-top:8px;">
+              <el-input :value="generatedInviteLink" readonly style="flex:1;" />
+              <el-button type="primary" @click="copyInviteLink">複製</el-button>
+            </div>
+          </div>
+          <template #footer>
+            <el-button @click="inviteDialogVisible = false">關閉</el-button>
+            <el-button type="primary" :loading="inviteSaving" @click="submitCreateInvite">產生</el-button>
+          </template>
+        </el-dialog>
+
+        <!-- KB 存取權限 dialog -->
+        <el-dialog
+          v-model="kbPermDialogVisible"
+          :title="kbPermTarget ? `${kbPermTarget.email} 的知識庫存取` : '知識庫存取'"
+          width="520px"
+        >
+          <div v-loading="kbPermLoading">
+            <p style="color:#888;margin-bottom:12px;font-size:13px;">admin 角色預設可見所有知識庫，不受此設定影響。</p>
+
+            <!-- 已授權的 KB 列表 -->
+            <el-table :data="kbPermGranted" size="small" style="width:100%;margin-bottom:16px;">
+              <el-table-column prop="kb_name" label="知識庫" min-width="160" />
+              <el-table-column prop="permission" label="權限" width="80" />
+              <el-table-column label="操作" width="80">
+                <template #default="{ row }">
+                  <el-button
+                    size="small" type="danger" plain
+                    :loading="kbPermGranting === row.kb_id"
+                    @click="revokeKbPerm(row.kb_id)"
+                  >撤銷</el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+
+            <!-- 授權新 KB -->
+            <div style="display:flex;gap:8px;align-items:center;">
+              <el-select v-model="kbPermGrantForm.kb_id" placeholder="選擇知識庫" style="flex:1;" filterable>
+                <el-option
+                  v-for="kb in allKbs"
+                  :key="kb.id"
+                  :label="kb.name"
+                  :value="kb.id"
+                  :disabled="kbPermGranted.some(p => p.kb_id === kb.id)"
+                />
+              </el-select>
+              <el-select v-model="kbPermGrantForm.permission" style="width:90px;">
+                <el-option label="read" value="read" />
+                <el-option label="write" value="write" />
+              </el-select>
+              <el-button type="primary" :loading="!!kbPermGranting" @click="grantKbPerm">授權</el-button>
+            </div>
+          </div>
+          <template #footer>
+            <el-button @click="kbPermDialogVisible = false">關閉</el-button>
+          </template>
+        </el-dialog>
+
+      </template>
+
       <!-- ── 關於 / 更新（Electron 專用）────────────────────────────── -->
       <template v-if="activeGroup === 'update'">
         <div class="settings-section">
@@ -1001,7 +1197,7 @@ import { ref, onMounted, onActivated, reactive, defineComponent, computed } from
 import { useRoute } from 'vue-router'
 import { Refresh, Check, ArrowDown } from '@element-plus/icons-vue'
 import { Layers, FolderOpen, MessageSquare, Network, Puzzle, Settings, Dna, Cpu, Key, Sliders, HardDrive, Database, Bot, User, Link, BookOpen, Mail, Download, Cloud, FileText, RefreshCw } from 'lucide-vue-next'
-import { wikiApi, systemSettingsApi, agentSkillsApi, monitoringApi, authApi } from '../api/index.js'
+import { wikiApi, systemSettingsApi, agentSkillsApi, monitoringApi, authApi, usersApi, kbPermissionsApi, inviteApi, kbApi } from '../api/index.js'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuthStore } from '../stores/auth.js'
 import { useUpdateStore } from '../stores/update.js'
@@ -1118,6 +1314,177 @@ async function testSmtp () {
   }
 }
 
+// ── 使用者管理（admin）────────────────────────────────────────────────────────
+const adminUsers        = ref([])
+const adminUsersLoading = ref(false)
+const adminInvites      = ref([])
+const allKbs            = ref([])
+
+// 新增使用者 dialog
+const createUserDialogVisible = ref(false)
+const createUserForm = reactive({ email: '', password: '', display_name: '', role: 'user' })
+const createUserSaving = ref(false)
+
+// 邀請 dialog
+const inviteDialogVisible   = ref(false)
+const inviteForm = reactive({ email: '', role: 'user', expires_days: 7 })
+const inviteSaving          = ref(false)
+const generatedInviteLink   = ref('')
+
+// KB 存取權限 dialog
+const kbPermDialogVisible  = ref(false)
+const kbPermTarget         = ref(null)   // { id, email }
+const kbPermGranted        = ref([])     // [{ kb_id, kb_name, permission }]
+const kbPermLoading        = ref(false)
+const kbPermGranting       = ref(null)   // 正在操作的 kb_id
+const kbPermGrantForm      = reactive({ kb_id: '', permission: 'read' })
+
+const ROLE_OPTIONS = ['admin', 'editor', 'user', 'readonly', 'auditor']
+const ROLE_TAG_TYPE = { admin: 'danger', editor: 'warning', user: 'primary', readonly: 'info', auditor: 'success' }
+
+async function loadAdminUsers() {
+  adminUsersLoading.value = true
+  try {
+    adminUsers.value = await usersApi.list()
+  } catch (e) { ElMessage.error('載入使用者失敗：' + e.message) }
+  finally { adminUsersLoading.value = false }
+}
+
+async function loadAdminInvites() {
+  try {
+    adminInvites.value = await inviteApi.list()
+  } catch (e) { /* 靜默 */ }
+}
+
+async function loadAllKbs() {
+  try {
+    allKbs.value = await kbApi.list()
+  } catch (e) { /* 靜默 */ }
+}
+
+async function toggleUserActive(user) {
+  try {
+    await usersApi.update(user.id, { is_active: !user.is_active })
+    user.is_active = !user.is_active
+    ElMessage.success(user.is_active ? '帳號已啟用' : '帳號已停用')
+  } catch (e) { ElMessage.error(e.message) }
+}
+
+async function updateUserRole(user, newRole) {
+  try {
+    await usersApi.update(user.id, { role: newRole })
+    user.role = newRole
+    ElMessage.success('角色已更新')
+  } catch (e) { ElMessage.error(e.message) }
+}
+
+async function confirmDeleteUser(user) {
+  try {
+    await ElMessageBox.confirm(`確定要刪除使用者 ${user.email}？此操作無法復原。`, '確認刪除', {
+      type: 'warning', confirmButtonText: '刪除', cancelButtonText: '取消'
+    })
+    await usersApi.delete(user.id)
+    adminUsers.value = adminUsers.value.filter(u => u.id !== user.id)
+    ElMessage.success('已刪除')
+  } catch (e) {
+    if (e !== 'cancel') ElMessage.error(e.message)
+  }
+}
+
+async function submitCreateUser() {
+  if (!createUserForm.email || !createUserForm.password) {
+    return ElMessage.warning('Email 和密碼為必填')
+  }
+  createUserSaving.value = true
+  try {
+    const u = await usersApi.create({ ...createUserForm })
+    adminUsers.value.push(u)
+    createUserDialogVisible.value = false
+    Object.assign(createUserForm, { email: '', password: '', display_name: '', role: 'user' })
+    ElMessage.success('使用者已建立')
+  } catch (e) { ElMessage.error(e.message) }
+  finally { createUserSaving.value = false }
+}
+
+async function submitCreateInvite() {
+  inviteSaving.value = true
+  generatedInviteLink.value = ''
+  try {
+    const data = await inviteApi.create({
+      email: inviteForm.email || null,
+      role: inviteForm.role,
+      expires_days: inviteForm.expires_days,
+    })
+    const base = window.location.origin
+    generatedInviteLink.value = `${base}/register?token=${data.token}`
+    await loadAdminInvites()
+    ElMessage.success('邀請連結已產生')
+  } catch (e) { ElMessage.error(e.message) }
+  finally { inviteSaving.value = false }
+}
+
+async function copyInviteLink() {
+  try {
+    await navigator.clipboard.writeText(generatedInviteLink.value)
+    ElMessage.success('已複製到剪貼簿')
+  } catch { ElMessage.error('複製失敗，請手動複製') }
+}
+
+async function confirmRevokeInvite(invite) {
+  try {
+    await ElMessageBox.confirm('確定要撤銷此邀請連結？', '確認撤銷', {
+      type: 'warning', confirmButtonText: '撤銷', cancelButtonText: '取消'
+    })
+    await inviteApi.revoke(invite.id)
+    adminInvites.value = adminInvites.value.filter(i => i.id !== invite.id)
+    ElMessage.success('已撤銷')
+  } catch (e) {
+    if (e !== 'cancel') ElMessage.error(e.message)
+  }
+}
+
+async function openKbPermDialog(user) {
+  kbPermTarget.value = user
+  kbPermDialogVisible.value = true
+  kbPermGrantForm.kb_id = ''
+  kbPermGrantForm.permission = 'read'
+  await refreshKbPerms()
+}
+
+async function refreshKbPerms() {
+  if (!kbPermTarget.value) return
+  kbPermLoading.value = true
+  try {
+    kbPermGranted.value = await usersApi.getKbPermissions(kbPermTarget.value.id)
+  } catch (e) { ElMessage.error(e.message) }
+  finally { kbPermLoading.value = false }
+}
+
+async function grantKbPerm() {
+  if (!kbPermGrantForm.kb_id) return ElMessage.warning('請選擇知識庫')
+  kbPermGranting.value = kbPermGrantForm.kb_id
+  try {
+    await kbPermissionsApi.grant(kbPermGrantForm.kb_id, {
+      user_id: kbPermTarget.value.id,
+      permission: kbPermGrantForm.permission,
+    })
+    await refreshKbPerms()
+    kbPermGrantForm.kb_id = ''
+    ElMessage.success('已授權')
+  } catch (e) { ElMessage.error(e.message) }
+  finally { kbPermGranting.value = null }
+}
+
+async function revokeKbPerm(kbId) {
+  kbPermGranting.value = kbId
+  try {
+    await kbPermissionsApi.revoke(kbId, kbPermTarget.value.id)
+    await refreshKbPerms()
+    ElMessage.success('已撤銷')
+  } catch (e) { ElMessage.error(e.message) }
+  finally { kbPermGranting.value = null }
+}
+
 // ── 群組切換 ──────────────────────────────────────────────────────────────────
 const GROUP_DEFS = computed(() => [
   { key: 'user',   label: '使用者設定' },
@@ -1127,6 +1494,7 @@ const GROUP_DEFS = computed(() => [
   { key: 'data',   label: '資料管理' },
   { key: 'system', label: '系統' },
   ...(authStore.userRole === 'admin' ? [{ key: 'email', label: '郵件通知' }] : []),
+  ...(authStore.userRole === 'admin' ? [{ key: 'admin', label: '使用者管理' }] : []),
   ...(isElectron ? [{ key: 'update', label: '關於 / 更新' }] : []),
 ])
 const activeGroup = ref('user')
@@ -1137,6 +1505,7 @@ function onGroupChange(group) {
   if (group === 'data')   { loadSchema(); loadBackupList() }
   if (group === 'system') { loadSkills(); loadClosePref() }
   if (group === 'email')  { loadSmtp() }
+  if (group === 'admin')  { loadAdminUsers(); loadAdminInvites(); loadAllKbs() }
   if (group === 'update') {
     updateCurrentVer.value = window.electronApp?.version || ''
     // 若背景偵測已發現新版，直接套用到 UI 狀態

@@ -5,7 +5,7 @@ import logging
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile, status
 from pydantic import BaseModel
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,7 +14,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from auth import CurrentUser, require_role
 from database import get_db
-from models import Document, DocumentKnowledgeBase
+from models import Document, DocumentKnowledgeBase, KBPermission
 from services.storage import upload_file
 from tasks.document_tasks import ingest_document
 
@@ -721,9 +721,18 @@ async def list_documents(
     kb_id: Optional[str] = Query(default=None),
     tag_id: Optional[str] = Query(default=None),
     include_deleted: bool = Query(default=False),
+    current_user: CurrentUser = None,
     db: AsyncSession = Depends(get_db),
 ):
     from models import KnowledgeBase, DocumentTag, Tag
+
+    # 非 admin 只能看授權的 KB 下的文件
+    permitted_kb_ids: set | None = None
+    if current_user and current_user.role != "admin":
+        perm_result = await db.execute(
+            select(KBPermission.kb_id).where(KBPermission.user_id == current_user.id)
+        )
+        permitted_kb_ids = {row[0] for row in perm_result.all()}
 
     q = select(Document).order_by(Document.created_at.desc()).limit(limit).offset(offset)
     if not include_deleted:
@@ -733,7 +742,13 @@ async def list_documents(
     if kb_id == "__none__":
         q = q.where(Document.knowledge_base_id.is_(None))
     elif kb_id:
+        # 如果預先指定 kb_id，要確認此 KB 在授權範圍內
+        if permitted_kb_ids is not None and kb_id not in permitted_kb_ids:
+            return []
         q = q.where(Document.knowledge_base_id == kb_id)
+    elif permitted_kb_ids is not None:
+        # 未指定 kb_id，但需限制到授權 KB
+        q = q.where(Document.knowledge_base_id.in_(permitted_kb_ids))
     if tag_id:
         q = q.where(
             Document.id.in_(
@@ -1040,17 +1055,30 @@ async def get_chunk_by_id(
 @router.get("/{doc_id}/chunks")
 async def get_document_chunks(
     doc_id: str,
+    request: Request,
     limit: int = Query(default=50, le=200),
     offset: int = Query(default=0, ge=0),
+    current_user: CurrentUser = None,
     db: AsyncSession = Depends(get_db),
 ):
     """取得文件的 chunks 列表（含文字內容）"""
-    from models import Chunk
+    from models import Chunk, DocumentAccessLog
 
     doc_result = await db.execute(select(Document).where(Document.id == doc_id))
     doc = doc_result.scalar_one_or_none()
     if doc is None:
         raise HTTPException(status_code=404, detail="文件不存在")
+
+    # 記錄瀏覽存取日誌（offset=0 才算首次開啟，避免翻頁重複計算）
+    if offset == 0:
+        client_ip = request.client.host if request.client else None
+        db.add(DocumentAccessLog(
+            document_id=doc_id,
+            user_id=current_user.id if current_user else None,
+            action="view",
+            ip_address=client_ip,
+        ))
+        await db.commit()
 
     q = (
         select(Chunk)
@@ -1256,12 +1284,14 @@ async def reanalyze_document(
 @router.get("/{doc_id}/download")
 async def download_document(
     doc_id: str,
+    request: Request,
     current_user: CurrentUser = None,
     db: AsyncSession = Depends(get_db),
 ):
     """從 MinIO 取得原始檔案內容（前端用於 SheetJS 渲染）"""
     from fastapi.responses import Response
     from services.storage import download_file as minio_download
+    from models import DocumentAccessLog
 
     result = await db.execute(select(Document).where(Document.id == doc_id))
     doc = result.scalar_one_or_none()
@@ -1275,6 +1305,16 @@ async def download_document(
     except Exception as e:
         logger.error("MinIO download failed %s: %s", doc.file_path, e)
         raise HTTPException(status_code=500, detail="檔案下載失敗")
+
+    # 記錄下載存取日誌
+    client_ip = request.client.host if request.client else None
+    db.add(DocumentAccessLog(
+        document_id=doc_id,
+        user_id=current_user.id if current_user else None,
+        action="download",
+        ip_address=client_ip,
+    ))
+    await db.commit()
 
     content_type_map = {
         "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

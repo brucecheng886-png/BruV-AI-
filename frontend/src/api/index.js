@@ -318,6 +318,44 @@ export const authApi = {
     apiFetch('/api/auth/change-password', { method: 'POST', headers: getHeaders(), body: JSON.stringify({ current_password, new_password }) }).then(handleResponse),
 }
 
+// ── 使用者管理 API（admin only）────────────────────────────────
+export const usersApi = {
+  list: () =>
+    apiFetch('/api/auth/users', { headers: getHeaders(false) }).then(handleResponse),
+  create: (body) =>
+    apiFetch('/api/auth/users', { method: 'POST', headers: getHeaders(), body: JSON.stringify(body) }).then(handleResponse),
+  update: (id, body) =>
+    apiFetch(`/api/auth/users/${id}`, { method: 'PATCH', headers: getHeaders(), body: JSON.stringify(body) }).then(handleResponse),
+  delete: (id) =>
+    apiFetch(`/api/auth/users/${id}`, { method: 'DELETE', headers: getHeaders(false) }).then(handleResponse),
+  getKbPermissions: (userId) =>
+    apiFetch(`/api/auth/users/${userId}/kb-permissions`, { headers: getHeaders(false) }).then(handleResponse),
+}
+
+// ── KB 存取權限 API（admin only）──────────────────────────────
+export const kbPermissionsApi = {
+  list: (kbId) =>
+    apiFetch(`/api/knowledge-bases/${kbId}/permissions`, { headers: getHeaders(false) }).then(handleResponse),
+  grant: (kbId, body) =>
+    apiFetch(`/api/knowledge-bases/${kbId}/permissions`, { method: 'POST', headers: getHeaders(), body: JSON.stringify(body) }).then(handleResponse),
+  revoke: (kbId, userId) =>
+    apiFetch(`/api/knowledge-bases/${kbId}/permissions/${userId}`, { method: 'DELETE', headers: getHeaders(false) }).then(handleResponse),
+}
+
+// ── 邀請 Token API（admin only + 公開 register）────────────────
+export const inviteApi = {
+  create: (body) =>
+    apiFetch('/api/auth/invite', { method: 'POST', headers: getHeaders(), body: JSON.stringify(body) }).then(handleResponse),
+  list: () =>
+    apiFetch('/api/auth/invites', { headers: getHeaders(false) }).then(handleResponse),
+  revoke: (id) =>
+    apiFetch(`/api/auth/invites/${id}`, { method: 'DELETE', headers: getHeaders(false) }).then(handleResponse),
+  getInfo: (token) =>
+    apiFetch(`/api/auth/invite/${token}`, { headers: getHeaders(false) }).then(handleResponse),
+  registerViaInvite: (body) =>
+    apiFetch('/api/auth/register-via-invite', { method: 'POST', headers: getHeaders(false), body: JSON.stringify(body) }).then(handleResponse),
+}
+
 // Chat stream returns raw response for ReadableStream processing
 export async function chatStream(query, conversationId, model, signal = null, docIds = [], kbScopeId = null, docScopeIds = [], tagScopeIds = [], agentType = 'chat', mode = 'agent') {
   const auth = useAuthStore()
@@ -446,15 +484,4 @@ export const agentSkillsApi = {
     apiFetch('/api/agent-skills/store/install', { method: 'POST', headers: getHeaders(), body: JSON.stringify({ page_key: pageKey }) }).then(handleResponse),
   uninstall: (pageKey) =>
     apiFetch(`/api/agent-skills/store/${pageKey}`, { method: 'DELETE', headers: getHeaders(false) }).then(handleResponse),
-}
-
-export const usersApi = {
-  list: () =>
-    apiFetch('/api/auth/users', { headers: getHeaders(false) }).then(handleResponse),
-  create: (body) =>
-    apiFetch('/api/auth/users', { method: 'POST', headers: getHeaders(), body: JSON.stringify(body) }).then(handleResponse),
-  update: (userId, body) =>
-    apiFetch(`/api/auth/users/${userId}`, { method: 'PATCH', headers: getHeaders(), body: JSON.stringify(body) }).then(handleResponse),
-  remove: (userId) =>
-    apiFetch(`/api/auth/users/${userId}`, { method: 'DELETE', headers: getHeaders(false) }).then(handleResponse),
 }

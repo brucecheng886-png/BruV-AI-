@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import CurrentUser, CurrentAdmin
 from database import get_db
-from models import KnowledgeBase, Document, DocumentKnowledgeBase, Chunk
+from models import KnowledgeBase, Document, DocumentKnowledgeBase, Chunk, KBPermission, User
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -82,6 +82,14 @@ async def list_knowledge_bases(
 ):
     result = await db.execute(select(KnowledgeBase).order_by(KnowledgeBase.created_at))
     kbs = result.scalars().all()
+
+    # 非 admin 只能看授權的 KB
+    if current_user and current_user.role != "admin":
+        perm_result = await db.execute(
+            select(KBPermission.kb_id).where(KBPermission.user_id == current_user.id)
+        )
+        permitted = {row[0] for row in perm_result.all()}
+        kbs = [kb for kb in kbs if kb.id in permitted]
     out = []
     for kb in kbs:
         count_result = await db.execute(
@@ -222,4 +230,95 @@ async def delete_knowledge_base(
     if not kb:
         raise HTTPException(status_code=404, detail="找不到知識庫")
     await db.delete(kb)
+    await db.commit()
+
+
+# ── KB 權限管理 ─────────────────────────────────────────────────
+
+class PermissionIn(BaseModel):
+    user_id: str
+    permission: str = "read"  # "read" | "write"
+
+
+class PermissionOut(BaseModel):
+    user_id: str
+    email: str
+    display_name: str | None
+    permission: str
+    granted_at: str
+
+
+@router.get("/{kb_id}/permissions", response_model=list[PermissionOut])
+async def list_kb_permissions(
+    kb_id: str,
+    current_user: CurrentAdmin,
+    db: AsyncSession = Depends(get_db),
+):
+    """列出有此 KB 存取權的使用者"""
+    result = await db.execute(
+        select(KBPermission, User)
+        .join(User, User.id == KBPermission.user_id)
+        .where(KBPermission.kb_id == kb_id)
+        .order_by(KBPermission.granted_at)
+    )
+    rows = result.all()
+    return [
+        PermissionOut(
+            user_id=perm.user_id,
+            email=user.email,
+            display_name=user.display_name,
+            permission=perm.permission,
+            granted_at=perm.granted_at.isoformat(),
+        )
+        for perm, user in rows
+    ]
+
+
+@router.post("/{kb_id}/permissions", status_code=status.HTTP_201_CREATED)
+async def grant_kb_permission(
+    kb_id: str,
+    body: PermissionIn,
+    current_user: CurrentAdmin,
+    db: AsyncSession = Depends(get_db),
+):
+    """授予使用者對此 KB 的存取權"""
+    kb = (await db.execute(select(KnowledgeBase).where(KnowledgeBase.id == kb_id))).scalar_one_or_none()
+    if not kb:
+        raise HTTPException(status_code=404, detail="找不到知識庫")
+    user = (await db.execute(select(User).where(User.id == body.user_id))).scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="使用者不存在")
+
+    existing = (await db.execute(
+        select(KBPermission)
+        .where(KBPermission.kb_id == kb_id, KBPermission.user_id == body.user_id)
+    )).scalar_one_or_none()
+    if existing:
+        existing.permission = body.permission
+    else:
+        db.add(KBPermission(
+            kb_id=kb_id,
+            user_id=body.user_id,
+            permission=body.permission,
+            granted_by=current_user.id,
+        ))
+    await db.commit()
+    return {"success": True}
+
+
+@router.delete("/{kb_id}/permissions/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def revoke_kb_permission(
+    kb_id: str,
+    user_id: str,
+    current_user: CurrentAdmin,
+    db: AsyncSession = Depends(get_db),
+):
+    """撤銷使用者對此 KB 的存取權"""
+    perm = (await db.execute(
+        select(KBPermission)
+        .where(KBPermission.kb_id == kb_id, KBPermission.user_id == user_id)
+    )).scalar_one_or_none()
+    if not perm:
+        raise HTTPException(status_code=404, detail="權限不存在")
+    await db.delete(perm)
     await db.commit()
