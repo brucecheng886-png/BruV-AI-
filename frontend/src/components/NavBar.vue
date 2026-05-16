@@ -1,10 +1,13 @@
 <template>
-  <div class="navbar">
+  <div :class="['navbar', { 'navbar--collapsed': navCollapsed }]">
     <div class="navbar-logo">
       <img src="/logo.svg" alt="logo" class="logo-img" />
       <span class="logo-text">BruV AI知識庫</span>
       <button v-if="isElectron" class="navbar-reload-btn" title="重新整理 (F5)" @click="reloadApp">
         <RefreshCw :size="14" :stroke-width="1.8" />
+      </button>
+      <button class="navbar-collapse-btn" :title="navCollapsed ? '展開選單' : '收合選單'" @click="navCollapsed = !navCollapsed">
+        <Menu :size="15" :stroke-width="1.5" />
       </button>
     </div>
     <nav class="navbar-nav">
@@ -14,9 +17,10 @@
         :to="item.path"
         class="nav-item"
         active-class="nav-active"
+        :title="navCollapsed ? item.label : ''"
       >
         <component :is="item.icon" :size="18" :stroke-width="1.5" />
-        {{ item.label }}
+        <span class="nav-label">{{ item.label }}</span>
       </router-link>
       <template v-if="authStore.userRole === 'admin'">
         <div class="nav-divider" />
@@ -26,9 +30,10 @@
           :to="item.path"
           class="nav-item"
           active-class="nav-active"
+          :title="navCollapsed ? item.label : ''"
         >
           <component :is="item.icon" :size="18" :stroke-width="1.5" />
-          {{ item.label }}
+          <span class="nav-label">{{ item.label }}</span>
         </router-link>
       </template>
     </nav>
@@ -48,11 +53,11 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { useAuthStore } from '../stores/auth.js'
 import { useUpdateStore } from '../stores/update.js'
 import { useRouter } from 'vue-router'
-import { MessageSquare, FolderOpen, Network, Puzzle, Dna, Settings, LogOut, RefreshCw, Users } from 'lucide-vue-next'
+import { MessageSquare, FolderOpen, Network, Puzzle, Dna, Settings, LogOut, RefreshCw, Users, Menu } from 'lucide-vue-next'
 
 const authStore = useAuthStore()
 const updateStore = useUpdateStore()
@@ -61,6 +66,8 @@ const router = useRouter()
 const appVersion = ref(window.electronApp?.version || '')
 const hasNewVersion = computed(() => !!updateStore.newVersion)
 const isElectron = navigator.userAgent.includes('Electron') || !!window.electronApp?.version
+const navCollapsed = ref(localStorage.getItem('nav-collapsed') === 'true')
+watch(navCollapsed, (val) => { localStorage.setItem('nav-collapsed', String(val)) })
 
 function reloadApp () {
   window.electronApp?.reload?.()
@@ -103,6 +110,9 @@ function goToUserSettings() {
   flex-direction: column;
   height: 100%;
   font-family: -apple-system, 'Microsoft JhengHei', sans-serif;
+  transition: width 0.25s ease, min-width 0.25s ease;
+  overflow: hidden;
+  flex-shrink: 0;
 }
 
 .navbar-logo {
@@ -112,10 +122,10 @@ function goToUserSettings() {
   align-items: center;
   justify-content: flex-start;
   gap: 10px;
+  flex-shrink: 0;
 }
 
 .navbar-reload-btn {
-  margin-left: auto;
   flex-shrink: 0;
   display: flex;
   align-items: center;
@@ -134,6 +144,68 @@ function goToUserSettings() {
   color: #1e293b;
 }
 
+/* Navbar collapse toggle button */
+.navbar-collapse-btn {
+  margin-left: auto;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: #94a3b8;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.navbar-collapse-btn:hover {
+  background: #e2e8f0;
+  color: #1e293b;
+}
+
+/* ── Collapsed state (52px icon rail) ─────────────────── */
+.navbar--collapsed {
+  width: 52px;
+  min-width: 52px;
+}
+.navbar--collapsed .navbar-logo {
+  padding: 13px 0;
+  justify-content: center;
+  gap: 0;
+}
+.navbar--collapsed .logo-img,
+.navbar--collapsed .logo-text,
+.navbar--collapsed .navbar-reload-btn {
+  display: none;
+}
+.navbar--collapsed .navbar-collapse-btn {
+  margin-left: 0;
+}
+.navbar--collapsed .nav-item {
+  justify-content: center;
+  padding: 10px 0;
+  gap: 0;
+}
+.navbar--collapsed .nav-label {
+  display: none;
+}
+.navbar--collapsed .nav-divider {
+  margin: 6px 10px;
+}
+.navbar--collapsed .footer-info,
+.navbar--collapsed .footer-logout {
+  display: none;
+}
+.navbar--collapsed .navbar-footer {
+  justify-content: center;
+  padding: 10px 0;
+}
+.navbar--collapsed .navbar-version {
+  display: none;
+}
+
 .logo-img {
   width: 32px;
   height: 32px;
@@ -146,6 +218,8 @@ function goToUserSettings() {
   color: #1e293b;
   letter-spacing: 0.01em;
   white-space: nowrap;
+  flex: 1;
+  overflow: hidden;
 }
 
 .navbar-nav {

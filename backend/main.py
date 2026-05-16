@@ -23,6 +23,7 @@ from routers import tags
 from routers import agent_skills
 from routers import monitoring
 from routers import fido2 as fido2_router
+from routers import folders as folders_router
 from audit import AuditMiddleware
 
 logger = logging.getLogger(__name__)
@@ -63,7 +64,7 @@ async def lifespan(app: FastAPI):
                 "INSERT INTO users (id, email, password, role, is_active, must_change_password) "
                 "VALUES (gen_random_uuid(), :em, :pw, 'admin', TRUE, FALSE) "
                 "ON CONFLICT (email) DO NOTHING",
-                {"em": "admin@local", "pw": "$2b$12$placeholder_hash_change_on_deploy"},
+                {"em": "admin@local", "pw": "$2b$12$KZgjKoSm4.U048LZPdoTAePyCuh4FVai9rAet2cfKzkLnLujX3ou."},
             ),
             (
                 "INSERT INTO agent_skills (page_key, name, user_prompt, is_enabled) "
@@ -159,6 +160,7 @@ app.include_router(tags.router,            prefix="/api/tags",             tags=
 app.include_router(agent_skills.router,    prefix="/api/agent-skills",     tags=["agent-skills"])
 app.include_router(monitoring.router,      prefix="/api/monitoring",       tags=["monitoring"])
 app.include_router(fido2_router.router,    prefix="/api/auth/fido2",        tags=["fido2"])
+app.include_router(folders_router.router,  prefix="/api/folders",           tags=["folders"])
 
 # audit logs 查詢（admin only）
 from fastapi import Depends

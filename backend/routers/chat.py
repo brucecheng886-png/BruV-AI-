@@ -12,7 +12,7 @@ import logging
 import re
 import uuid
 from datetime import datetime, timezone
-from typing import AsyncIterator, Optional
+from typing import AsyncIterator, List, Optional
 
 import httpx
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
@@ -1268,7 +1268,7 @@ async def chat_stream_with_file(
     kb_scope_id: Optional[str] = Form(None),
     doc_scope_ids: Optional[str] = Form(None), # JSON 字串
     tag_scope_ids: Optional[str] = Form(None), # JSON 字串
-    file: Optional[UploadFile] = File(None),
+    files: Optional[List[UploadFile]] = File(None),
     current_user: CurrentUser = None,
     db: AsyncSession = Depends(get_db),
 ):
@@ -1290,32 +1290,78 @@ async def chat_stream_with_file(
     _doc_scope_ids = _parse_list(doc_scope_ids)
     _tag_scope_ids = _parse_list(tag_scope_ids)
 
-    # 分析附件，建立 file_context（先組基本內容，第一輪 priming 在 conv 解析後加）
+    # 分析附件，建立 file_context（支援多檔案，每份各自解析後合併）
     file_context: Optional[str] = None
     _file_priming: Optional[str] = None  # 僅第一輪注入的「先詢問意圖」提示
-    if file and file.filename:
-        ext = os.path.splitext(file.filename)[1].lower()
-        fname = file.filename
-        if ext in _EXCEL_EXTENSIONS:
-            # 讀取原始 bytes 並解析成摘要注入
-            file_bytes = await file.read()
-            await file.seek(0)  # 重置供後續可能的二次讀取
-            preview = _excel_preview(file_bytes, fname, max_rows=20)
-            file_context = (
-                f"【使用者附上的 Excel/CSV 檔案：{fname}】\n"
-                f"{preview}"
-            )
+    _valid_files = [f for f in (files or []) if f and f.filename]
+    _first_excel_fname: Optional[str] = None  # 第一個 excel 檔名，供 import_excel action 用
+    if _valid_files:
+        parts = []
+        has_excel = False
+        has_doc = False
+        for _f in _valid_files:
+            ext = os.path.splitext(_f.filename)[1].lower()
+            fname = _f.filename
+            if ext in _EXCEL_EXTENSIONS:
+                file_bytes = await _f.read()
+                preview = _excel_preview(file_bytes, fname, max_rows=20)
+                parts.append(
+                    f"【使用者附上的 Excel/CSV 檔案：{fname}】\n{preview}"
+                )
+                if not _first_excel_fname:
+                    _first_excel_fname = fname
+                has_excel = True
+            elif ext in _DOC_EXTENSIONS:
+                file_bytes = await _f.read()
+                extracted_text = ""
+                try:
+                    if ext == ".pdf":
+                        from pypdf import PdfReader
+                        import io
+                        reader = PdfReader(io.BytesIO(file_bytes))
+                        pages_text = []
+                        for page in reader.pages:
+                            t = page.extract_text() or ""
+                            if t.strip():
+                                pages_text.append(t.strip())
+                        extracted_text = "\n\n".join(pages_text)
+                    elif ext in (".txt", ".md", ".csv"):
+                        extracted_text = file_bytes.decode("utf-8", errors="replace")
+                    elif ext == ".docx":
+                        try:
+                            import docx as _docx
+                            import io
+                            doc = _docx.Document(io.BytesIO(file_bytes))
+                            extracted_text = "\n".join(p.text for p in doc.paragraphs if p.text.strip())
+                        except Exception:
+                            extracted_text = ""
+                except Exception as _e:
+                    extracted_text = f"（文字萃取失敗：{_e}）"
+                MAX_CHARS = 2000
+                preview_text = extracted_text[:MAX_CHARS]
+                if len(extracted_text) > MAX_CHARS:
+                    preview_text += f"\n…（內容過長，已截取前 {MAX_CHARS} 字）"
+                parts.append(
+                    f"【使用者附上的文件：{fname}】\n"
+                    f"{preview_text if preview_text.strip() else '（無法萃取文字內容）'}"
+                )
+                has_doc = True
+            else:
+                parts.append(f"【使用者本次附上檔案：{fname}，格式暫不支援自動處理】")
+        file_context = "\n\n".join(parts)
+        if has_excel:
             _file_priming = (
                 "**重要：上方的 Excel 資料預覽已直接嵌入本對話 context，你已經看到了這份資料。**\n"
                 "請不要說「無法讀取附件」——資料就在上方，請直接根據使用者的問題分析它。\n"
                 "若使用者明確說要「匯入」或「匯入連結」，請在回應中加入以下 JSON 標記（獨立一行）：\n"
                 '{"__action__": "import_excel"}'
             )
-        elif ext in _DOC_EXTENSIONS:
-            file_context = f"【使用者本次附上檔案：{fname}】"
-            _file_priming = "在進行任何操作之前，請先詢問使用者：是要將此文件加入知識庫，還是只想讓你閱讀並回答問題？"
-        else:
-            file_context = f"【使用者本次附上檔案：{fname}，格式暫不支援自動處理】"
+        elif has_doc:
+            _file_priming = (
+                "**重要：上方的文件內容已直接嵌入本對話 context，你已經看到了這份文件的文字內容。**\n"
+                "請不要說「無法讀取附件」——內容就在上方，請直接根據使用者的問題分析它。\n"
+                "若使用者要將此文件加入知識庫，請告知可以點「文件管理」頁面上傳。"
+            )
 
     llm_model = model or None
 
@@ -1333,7 +1379,7 @@ async def chat_stream_with_file(
         _conv_title = conv.title
     else:
         conv_id = str(uuid.uuid4())
-        _title_src = query.strip() or (file.filename if file and file.filename else "附件對話")
+        _title_src = query.strip() or (_valid_files[0].filename if _valid_files else "附件對話")
         first_words = _title_src[:30] + ("…" if len(_title_src) > 30 else "")
         new_conv = Conversation(
             id=conv_id,
@@ -1365,7 +1411,7 @@ async def chat_stream_with_file(
             file_context = file_context + "\n" + _file_priming
     # 空 query 時以檔名作為 embedding 依據，讓 RAG 仍可運作
     _effective_query = query.strip() or (
-        f"請分析這份附件：{file.filename}" if file and file.filename else "你好"
+        f"請分析這份附件：{', '.join(f.filename for f in _valid_files)}" if _valid_files else "你好"
     )
 
     async def _stream_wrapper():
@@ -1384,7 +1430,7 @@ async def chat_stream_with_file(
             # 檢查 __action__ 標記，轉換為 SSE action 事件
             if '__action__": "import_excel"' in chunk:
                 # 把這段替換為 action 事件
-                yield "data: " + _json.dumps({"type": "action", "action": "import_excel", "filename": file.filename if file else ""}) + "\n\n"
+                yield "data: " + _json.dumps({"type": "action", "action": "import_excel", "filename": _first_excel_fname or ""}) + "\n\n"
             else:
                 yield chunk
 

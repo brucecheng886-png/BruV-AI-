@@ -1170,7 +1170,7 @@ function setupSetupIPC (setupCompleteFile) {
       if (envExists) {
         try {
           const volOut = await runCommand(
-            `docker volume ls --filter name=bruv_ai --format "{{.Name}}"`, 5000
+            `docker volume ls --filter name=bruv-ai --format "{{.Name}}"`, 5000
           )
           volumesExist = volOut.trim().length > 0
         } catch { /* Docker 未跑，無法判斷 */ }

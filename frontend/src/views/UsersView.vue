@@ -11,59 +11,44 @@
       </el-button>
     </div>
 
-    <!-- Table -->
-    <div class="users-table-wrap">
-      <el-table
-        :data="users"
-        v-loading="loading"
-        stripe
-        style="width:100%"
-      >
-        <el-table-column prop="email" label="Email" min-width="200" />
-        <el-table-column prop="display_name" label="名稱" width="140">
-          <template #default="{ row }">{{ row.display_name || '—' }}</template>
-        </el-table-column>
-        <el-table-column prop="role" label="角色" width="120">
-          <template #default="{ row }">
+    <!-- Cards -->
+    <div v-loading="loading" class="users-cards">
+      <div v-for="row in users" :key="row.id" class="user-card" :class="{ 'card--inactive': !row.is_active }">
+        <!-- Avatar -->
+        <div class="uc-avatar" :style="{ background: avatarColor(row.email) }">
+          {{ (row.display_name || row.email).charAt(0).toUpperCase() }}
+        </div>
+        <!-- Info -->
+        <div class="uc-info">
+          <div class="uc-email" :title="row.email">{{ row.email }}</div>
+          <div v-if="row.display_name" class="uc-name">{{ row.display_name }}</div>
+          <div class="uc-tags">
             <el-tag :type="roleTagType(row.role)" size="small">{{ ROLE_LABELS[row.role] || row.role }}</el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="狀態" width="100">
-          <template #default="{ row }">
-            <el-tag :type="row.is_active ? 'success' : 'danger'" size="small">
-              {{ row.is_active ? '啟用' : '停用' }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="首次改密" width="100">
-          <template #default="{ row }">
+            <el-tag :type="row.is_active ? 'success' : 'danger'" size="small">{{ row.is_active ? '啟用' : '停用' }}</el-tag>
             <el-tag v-if="row.must_change_password" type="warning" size="small">待改密</el-tag>
-            <span v-else class="text-muted">—</span>
-          </template>
-        </el-table-column>
-        <el-table-column prop="created_at" label="建立時間" width="170">
-          <template #default="{ row }">{{ formatDate(row.created_at) }}</template>
-        </el-table-column>
-        <el-table-column label="操作" width="160" fixed="right">
-          <template #default="{ row }">
-            <el-button size="small" plain @click="openEdit(row)">編輯</el-button>
-            <el-button
-              size="small"
-              :type="row.is_active ? 'warning' : 'success'"
-              plain
-              :disabled="row.id === selfId"
-              @click="toggleActive(row)"
-            >{{ row.is_active ? '停用' : '啟用' }}</el-button>
-            <el-button
-              size="small"
-              type="danger"
-              plain
-              :disabled="row.id === selfId"
-              @click="confirmDelete(row)"
-            >刪除</el-button>
-          </template>
-        </el-table-column>
-      </el-table>
+          </div>
+          <div class="uc-date">建立於 {{ formatDate(row.created_at) }}</div>
+        </div>
+        <!-- Actions -->
+        <div class="uc-actions">
+          <el-button size="small" plain @click="openEdit(row)">編輯</el-button>
+          <el-button
+            size="small"
+            :type="row.is_active ? 'warning' : 'success'"
+            plain
+            :disabled="row.id === selfId"
+            @click="toggleActive(row)"
+          >{{ row.is_active ? '停用' : '啟用' }}</el-button>
+          <el-button
+            size="small"
+            type="danger"
+            plain
+            :disabled="row.id === selfId"
+            @click="confirmDelete(row)"
+          >刪除</el-button>
+        </div>
+      </div>
+      <div v-if="!loading && users.length === 0" class="users-empty">尚無使用者</div>
     </div>
 
     <!-- 新增對話框 -->
@@ -120,6 +105,13 @@ import { Plus } from 'lucide-vue-next'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { usersApi } from '../api/index.js'
 import { useAuthStore } from '../stores/auth.js'
+
+const AVATAR_COLORS = ['#5b8df5','#7c6ef5','#e86c8d','#f5a623','#36b37e','#00b8d9','#6554c0','#ff8b00']
+function avatarColor(email) {
+  let hash = 0
+  for (let i = 0; i < email.length; i++) hash = email.charCodeAt(i) + ((hash << 5) - hash)
+  return AVATAR_COLORS[Math.abs(hash) % AVATAR_COLORS.length]
+}
 
 const authStore = useAuthStore()
 const selfId = authStore.userId
@@ -277,15 +269,83 @@ async function confirmDelete(row) {
   margin: 0;
 }
 
-.users-table-wrap {
-  background: #fff;
-  border-radius: 8px;
-  box-shadow: 0 1px 4px rgba(0,0,0,.06);
-  overflow: hidden;
+.users-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
-.text-muted {
+.user-card {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  background: #fff;
+  border: 1px solid #e4e8ef;
+  border-radius: 12px;
+  padding: 16px 20px;
+  transition: box-shadow 0.18s, border-color 0.18s;
+}
+.user-card:hover {
+  border-color: #c0ccda;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.08);
+}
+.card--inactive {
+  opacity: 0.6;
+}
+
+.uc-avatar {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  font-weight: 700;
+  color: #fff;
+  flex-shrink: 0;
+}
+
+.uc-info {
+  flex: 1;
+  min-width: 0;
+}
+.uc-email {
+  font-size: 14px;
+  font-weight: 600;
+  color: #1e293b;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.uc-name {
+  font-size: 12px;
+  color: #64748b;
+  margin: 2px 0 4px;
+}
+.uc-tags {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+  margin: 4px 0;
+}
+.uc-date {
+  font-size: 11px;
   color: #94a3b8;
+  margin-top: 3px;
+}
+
+.uc-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.users-empty {
+  text-align: center;
+  padding: 40px 0;
+  color: #b0b8c1;
+  font-size: 14px;
 }
 
 .form-hint {

@@ -342,6 +342,36 @@ export const kbPermissionsApi = {
     apiFetch(`/api/knowledge-bases/${kbId}/permissions/${userId}`, { method: 'DELETE', headers: getHeaders(false) }).then(handleResponse),
 }
 
+// ── 共享硬碟資料夾 API ─────────────────────────────────────────
+export const foldersApi = {
+  list: () =>
+    apiFetch('/api/folders', { headers: getHeaders(false) }).then(handleResponse),
+  create: (body) =>
+    apiFetch('/api/folders', { method: 'POST', headers: getHeaders(), body: JSON.stringify(body) }).then(handleResponse),
+  get: (id) =>
+    apiFetch(`/api/folders/${id}`, { headers: getHeaders(false) }).then(handleResponse),
+  update: (id, body) =>
+    apiFetch(`/api/folders/${id}`, { method: 'PUT', headers: getHeaders(), body: JSON.stringify(body) }).then(handleResponse),
+  delete: (id) =>
+    apiFetch(`/api/folders/${id}`, { method: 'DELETE', headers: getHeaders(false) }).then(handleResponse),
+  move: (id, parentId) =>
+    apiFetch(`/api/folders/${id}/move`, { method: 'POST', headers: getHeaders(), body: JSON.stringify({ parent_id: parentId }) }).then(handleResponse),
+  children: (id) =>
+    apiFetch(`/api/folders/${id}/children`, { headers: getHeaders(false) }).then(handleResponse),
+  listDocs: (id) =>
+    apiFetch(`/api/folders/${id}/documents`, { headers: getHeaders(false) }).then(handleResponse),
+  addDocs: (id, docIds) =>
+    apiFetch(`/api/folders/${id}/documents`, { method: 'POST', headers: getHeaders(), body: JSON.stringify({ doc_ids: docIds }) }).then(handleResponse),
+  removeDoc: (id, docId) =>
+    apiFetch(`/api/folders/${id}/documents/${docId}`, { method: 'DELETE', headers: getHeaders(false) }).then(handleResponse),
+  listPerms: (id) =>
+    apiFetch(`/api/folders/${id}/permissions`, { headers: getHeaders(false) }).then(handleResponse),
+  addPerm: (id, body) =>
+    apiFetch(`/api/folders/${id}/permissions`, { method: 'POST', headers: getHeaders(), body: JSON.stringify(body) }).then(handleResponse),
+  removePerm: (id, userId) =>
+    apiFetch(`/api/folders/${id}/permissions/${userId}`, { method: 'DELETE', headers: getHeaders(false) }).then(handleResponse),
+}
+
 // ── 邀請 Token API（admin only + 公開 register）────────────────
 export const inviteApi = {
   create: (body) =>
@@ -375,7 +405,7 @@ export async function chatStream(query, conversationId, model, signal = null, do
   })
 }
 
-export async function chatStreamWithFile(query, conversationId, model, file, signal = null, docIds = [], kbScopeId = null, docScopeIds = [], tagScopeIds = [], agentType = 'chat', mode = 'agent') {
+export async function chatStreamWithFile(query, conversationId, model, files, signal = null, docIds = [], kbScopeId = null, docScopeIds = [], tagScopeIds = [], agentType = 'chat', mode = 'agent') {
   const auth = useAuthStore()
   const fd = new FormData()
   fd.append('query', query)
@@ -387,7 +417,8 @@ export async function chatStreamWithFile(query, conversationId, model, file, sig
   if (kbScopeId) fd.append('kb_scope_id', kbScopeId)
   if (docScopeIds && docScopeIds.length) fd.append('doc_scope_ids', JSON.stringify(docScopeIds))
   if (tagScopeIds && tagScopeIds.length) fd.append('tag_scope_ids', JSON.stringify(tagScopeIds))
-  if (file) fd.append('file', file)
+  const fileList = Array.isArray(files) ? files : (files ? [files] : [])
+  for (const f of fileList) fd.append('files', f)
   return fetch('/api/chat/stream-with-file', {
     method: 'POST',
     headers: {

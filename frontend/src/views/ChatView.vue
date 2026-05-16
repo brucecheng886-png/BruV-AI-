@@ -1,8 +1,11 @@
 ﻿<template>
   <div class="chat-root">
 
+    <!-- Mobile sidebar overlay -->
+    <div v-if="mobileSidebarOpen" class="mobile-sidebar-overlay" @click="mobileSidebarOpen = false" />
+
     <!-- ── Sidebar ─────────────────────────────────────────── -->
-    <aside class="chat-sidebar">
+    <aside :class="['chat-sidebar', { 'chat-sidebar--mobile-open': mobileSidebarOpen }]">
       <div class="sidebar-top">
         <el-button type="primary" class="new-conv-btn" @click="newConversation">+ 新對話</el-button>
       </div>
@@ -52,8 +55,16 @@
     <!-- ── Main ──────────────────────────────────────────────── -->
     <div class="chat-main">
 
+      <!-- Mobile header (hamburger + title, desktop 隱藏) -->
+      <div class="mobile-chat-header">
+        <button class="mobile-sidebar-toggle" @click="mobileSidebarOpen = !mobileSidebarOpen">
+          <Menu :size="20" :stroke-width="1.5" />
+        </button>
+        <span class="mobile-chat-title">{{ conversations.find(c => c.id === currentConvId)?.title || 'BruV AI' }}</span>
+      </div>
+
       <!-- 隱藏檔案選擇器（home 與 active 狀態共用，避免 v-if 切換後 ref 變 null）-->
-      <input ref="fileInputRef" type="file" style="display:none"
+      <input ref="fileInputRef" type="file" style="display:none" multiple
         accept=".xlsx,.pdf,.txt,.docx,.md,.csv"
         @change="onFileSelected" />
 
@@ -72,11 +83,13 @@
               </el-tag>
             </div>
             <!-- 附件檔案預覽 -->
-            <div v-if="pendingFile" class="pending-file-preview">
-              <span class="pending-file-icon">📎</span>
-              <span class="pending-file-name">{{ pendingFile.name }}</span>
-              <span class="pending-file-size">({{ (pendingFile.size / 1024).toFixed(1) }}KB)</span>
-              <el-button link size="small" @click="removePendingFile">×</el-button>
+            <div v-if="pendingFiles.length" class="pending-file-preview">
+              <div v-for="(pf, pi) in pendingFiles" :key="pi" class="pending-file-item">
+                <span class="pending-file-icon">📎</span>
+                <span class="pending-file-name">{{ pf.name }}</span>
+                <span class="pending-file-size">({{ (pf.size / 1024).toFixed(1) }}KB)</span>
+                <el-button link size="small" @click="removePendingFile(pi)">×</el-button>
+              </div>
             </div>
             <div v-if="slashMenu.show" class="cmd-menu">
               <div v-for="cmd in slashMenu.filtered" :key="cmd.name" class="cmd-item" @mousedown.prevent="applySlash(cmd)">
@@ -132,7 +145,7 @@
                 <el-dropdown trigger="click" @command="(cmd) => chatMode = cmd" :disabled="streaming">
                   <button class="chat-mode-btn">
                     <component :is="MODE_ICONS[chatMode]" :size="13" :stroke-width="1.5" style="margin-right:4px;vertical-align:middle" />
-                    {{ MODE_LABELS[chatMode] }} ▾
+                    <span class="mode-label">{{ MODE_LABELS[chatMode] }} ▾</span>
                   </button>
                   <template #dropdown>
                     <el-dropdown-menu>
@@ -171,18 +184,22 @@
                     </div>
                     <div class="model-section">
                       <div class="model-section-title">雲端模型</div>
-                      <div v-for="m in cloudModels" :key="m.value" class="model-option" @click="selectModel(m.value)">
-                        <div>
+                      <div v-for="m in cloudModels" :key="m.value" class="model-option cloud-model-option" @click="selectModel(m.value)">
+                        <div style="flex:1;min-width:0;">
                           <div class="model-option-name">{{ m.value }}</div>
                           <div class="model-option-desc">{{ m.desc }}</div>
                         </div>
-                        <el-icon v-if="selectedModel === m.value" class="model-check"><Check /></el-icon>
+                        <Check v-if="selectedModel === m.value" :size="14" :stroke-width="2" class="model-check" />
+                        <button class="model-delete-btn" @click.stop="removeCloudModel(m)" title="刪除"><Trash2 :size="12" :stroke-width="1.5" /></button>
+                      </div>
+                      <div class="model-section-footer">
+                        <button class="model-add-cloud-btn" @click.stop="showCloudModelHub = true; modelPopoverVisible = false">+ 新增模型</button>
                       </div>
                     </div>
                   </div>
                 </el-popover>
                 <button v-if="streaming" class="stop-btn" @click="stopStreaming"><Square :size="14" :stroke-width="1.5" /></button>
-                <button v-else class="send-btn" :disabled="!inputText.trim() && !pendingFile" @click="sendMessage">
+                <button v-else class="send-btn" :disabled="!inputText.trim() && !pendingFiles.length" @click="sendMessage">
                   <ArrowUp :size="16" :stroke-width="2" />
                 </button>
               </div>
@@ -208,7 +225,16 @@
               <div class="msg-actions user-actions">
                 <button @click="copyText(msg.content)" title="複製"><Copy :size="14" :stroke-width="1.5" /></button>
               </div>
-              <div class="message-bubble user-bubble">{{ msg.content }}</div>
+              <div class="user-msg-wrap">
+                <div v-if="msg.content" class="message-bubble user-bubble">{{ msg.content }}</div>
+                <template v-if="msg.attachments && msg.attachments.length">
+                  <div v-for="(att, ai) in msg.attachments" :key="ai" class="msg-attachment-badge" @dblclick="openAttachment(att)" title="雙擊開啟檔案">
+                    <span class="attach-badge-icon">📎</span>
+                    <span class="attach-badge-name">{{ att.name }}</span>
+                    <span class="attach-badge-size">({{ (att.size / 1024).toFixed(1) }}KB)</span>
+                  </div>
+                </template>
+              </div>
             </div>
 
             <!-- AI bubble -->
@@ -288,11 +314,13 @@
             </el-tag>
           </div>
           <!-- 附件檔案預覽 -->
-          <div v-if="pendingFile" class="pending-file-preview">
-            <span class="pending-file-icon">📎</span>
-            <span class="pending-file-name">{{ pendingFile.name }}</span>
-            <span class="pending-file-size">({{ (pendingFile.size / 1024).toFixed(1) }}KB)</span>
-            <el-button link size="small" @click="removePendingFile">×</el-button>
+          <div v-if="pendingFiles.length" class="pending-file-preview">
+            <div v-for="(pf, pi) in pendingFiles" :key="pi" class="pending-file-item">
+              <span class="pending-file-icon">📎</span>
+              <span class="pending-file-name">{{ pf.name }}</span>
+              <span class="pending-file-size">({{ (pf.size / 1024).toFixed(1) }}KB)</span>
+              <el-button link size="small" @click="removePendingFile(pi)">×</el-button>
+            </div>
           </div>
           <div v-if="slashMenu.show" class="cmd-menu cmd-menu--bar">
             <div v-for="cmd in slashMenu.filtered" :key="cmd.name" class="cmd-item" @mousedown.prevent="applySlash(cmd)">
@@ -348,7 +376,7 @@
               <el-dropdown trigger="click" @command="(cmd) => chatMode = cmd" :disabled="streaming">
                 <button class="chat-mode-btn">
                   <component :is="MODE_ICONS[chatMode]" :size="13" :stroke-width="1.5" style="margin-right:4px;vertical-align:middle" />
-                  {{ MODE_LABELS[chatMode] }} ▾
+                  <span class="mode-label">{{ MODE_LABELS[chatMode] }} ▾</span>
                 </button>
                 <template #dropdown>
                   <el-dropdown-menu>
@@ -387,18 +415,22 @@
                   </div>
                   <div class="model-section">
                     <div class="model-section-title">雲端模型</div>
-                    <div v-for="m in cloudModels" :key="m.value" class="model-option" @click="selectModel(m.value)">
-                      <div>
+                    <div v-for="m in cloudModels" :key="m.value" class="model-option cloud-model-option" @click="selectModel(m.value)">
+                      <div style="flex:1;min-width:0;">
                         <div class="model-option-name">{{ m.value }}</div>
                         <div class="model-option-desc">{{ m.desc }}</div>
                       </div>
                       <Check v-if="selectedModel === m.value" :size="14" :stroke-width="2" class="model-check" />
+                      <button class="model-delete-btn" @click.stop="removeCloudModel(m)" title="刪除"><Trash2 :size="12" :stroke-width="1.5" /></button>
+                    </div>
+                    <div class="model-section-footer">
+                      <button class="model-add-cloud-btn" @click.stop="showCloudModelHub = true; modelPopoverVisible = false">+ 新增模型</button>
                     </div>
                   </div>
                 </div>
               </el-popover>
               <button v-if="streaming" class="stop-btn" @click="stopStreaming"><Square :size="14" :stroke-width="1.5" /></button>
-              <button v-else class="send-btn" :disabled="!inputText.trim() && !pendingFile" @click="sendMessage">
+              <button v-else class="send-btn" :disabled="!inputText.trim() && !pendingFiles.length" @click="sendMessage">
                 <ArrowUp :size="16" :stroke-width="2" />
               </button>
             </div>
@@ -408,6 +440,23 @@
 
     </div>
   </div>
+
+  <!-- ── Cloud Model Hub Dialog ────────────────────────────────── -->
+  <el-dialog v-model="showCloudModelHub" title="新增雲端模型" width="500px" :close-on-click-modal="false">
+    <div v-for="group in CHAT_CLOUD_PRESETS" :key="group.provider" class="chat-hub-group">
+      <div class="chat-hub-provider-title">{{ group.name }}</div>
+      <div class="chat-hub-cards">
+        <div v-for="modelName in group.models" :key="modelName" class="chat-hub-card">
+          <span class="chat-hub-card-name">{{ modelName }}</span>
+          <el-tag v-if="cloudModels.some(m => m.value === modelName)" size="small" type="success">已新增</el-tag>
+          <el-button v-else size="small" type="primary" plain @click="addCloudModelFromHub(group, modelName)">新增</el-button>
+        </div>
+      </div>
+    </div>
+    <template #footer>
+      <el-button @click="showCloudModelHub = false">關閉</el-button>
+    </template>
+  </el-dialog>
 
   <!-- ── Scope Dialog ───────────────────────────────────────────── -->
   <el-dialog v-model="scopeDialog.show" title="選擇對話範圍" width="420px" :close-on-click-modal="false">
@@ -496,8 +545,8 @@ import bash from 'highlight.js/lib/languages/bash'
 import json from 'highlight.js/lib/languages/json'
 import xml from 'highlight.js/lib/languages/xml'
 import css from 'highlight.js/lib/languages/css'
-import { ElMessage } from 'element-plus'
-import { ArrowUp, Check, Plus, MessageCircle, Bot, Square, Copy, RotateCcw, ChevronDown, Code, BookOpen, PenLine, Search, BarChart2, Paperclip, FileSpreadsheet, ListChecks } from 'lucide-vue-next'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { ArrowUp, Check, Plus, MessageCircle, Bot, Square, Copy, RotateCcw, ChevronDown, Code, BookOpen, PenLine, Search, BarChart2, Paperclip, FileSpreadsheet, ListChecks, Trash2, Menu, X } from 'lucide-vue-next'
 import { chatStream, chatStreamWithFile, conversationsApi, agentApi, systemSettingsApi, docsApi, chatApi, kbApi, tagsApi, ontologyApi, pluginsApi, wikiApi } from '../api/index.js'
 import { storeToRefs } from 'pinia'
 import { useChatStore } from '../stores/chat.js'
@@ -564,6 +613,7 @@ function truncate(str, n = 80) {
 // ── State ─────────────────────────────────────────────────────
 const inputText = ref('')
 const streaming = ref(false)
+const mobileSidebarOpen = ref(false)
 const messagesEl = ref(null)
 const atBottom = ref(true)
 const chatMode = ref('agent')
@@ -594,7 +644,7 @@ const agentMenu = reactive({ show: false })
 const chunkModal = reactive({ show: false, loading: false, error: '', data: null })
 const attachedDocs = ref([])
 // 附件檔案
-const pendingFile = ref(null)  // File 物件
+const pendingFiles = ref([])  // File[] 陣列
 const fileInputRef = ref(null)
 const importInputRef = ref(null)
 const modelPopoverVisible = ref(false)
@@ -734,6 +784,7 @@ async function loadConversations() {
 
 async function selectConversation(conv) {
   currentConvId.value = conv.id
+  mobileSidebarOpen.value = false
   // 載入對話的 scope
   if (conv.kb_scope_id) {
     convScope.mode = 'kb'
@@ -759,7 +810,7 @@ function newConversation() {
   currentConvId.value = null
   messages.value = []
   attachedDocs.value = []
-  pendingFile.value = null
+  pendingFiles.value = []
   inputText.value = ''
   slashMenu.show = false
   mentionMenu.show = false
@@ -780,7 +831,7 @@ function _resetToEmpty() {
   currentConvId.value = null
   messages.value = []
   attachedDocs.value = []
-  pendingFile.value = null
+  pendingFiles.value = []
   inputText.value = ''
   slashMenu.show = false
   mentionMenu.show = false
@@ -836,6 +887,46 @@ async function commitRename(conv) {
 }
 
 // ── Models ────────────────────────────────────────────────────
+const showCloudModelHub = ref(false)
+const CHAT_CLOUD_PRESETS = [
+  { provider: 'anthropic', name: 'Anthropic Claude', developer: 'Anthropic', context_length: 200000,
+    models: [
+      'claude-opus-4-7',
+      'claude-sonnet-4-6',
+      'claude-opus-4-6',
+      'claude-opus-4-5-20251101',
+      'claude-haiku-4-5-20251001',
+      'claude-3-5-sonnet-20241022',
+      'claude-3-5-haiku-20241022',
+    ] },
+  { provider: 'openai', name: 'OpenAI', developer: 'OpenAI', context_length: 128000,
+    models: ['gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini', 'o3', 'o4-mini'] },
+]
+
+async function removeCloudModel(m) {
+  try {
+    await ElMessageBox.confirm(`刪除模型「${m.value}」？`, '確認刪除', {
+      confirmButtonText: '刪除', cancelButtonText: '取消', type: 'warning',
+    })
+  } catch { return }
+  try {
+    await wikiApi.delete(m.id)
+    await loadModels()
+    ElMessage.success('已刪除')
+  } catch { ElMessage.error('刪除失敗') }
+}
+
+async function addCloudModelFromHub(preset, modelName) {
+  if (cloudModels.value.some(m => m.value === modelName)) {
+    ElMessage.info('該模型已存在'); return
+  }
+  try {
+    await wikiApi.create({ name: modelName, developer: preset.developer, provider: preset.provider, model_type: 'chat', context_length: preset.context_length })
+    await loadModels()
+    ElMessage.success(`已新增 ${modelName}`)
+  } catch(e) { ElMessage.error(`新增失敗：${e.message || e}`) }
+}
+
 function setModelCategory(cat) {
   modelCategory.value = cat
   const list = cat === 'cloud' ? cloudModels.value.map(m => m.value) : localModels.value
@@ -861,6 +952,7 @@ async function loadModels() {
       )
       cloudModels.value = wikiChatModels.value.map(m => ({
         value: m.name,
+        id: m.id,
         desc: m.developer || m.provider,
       }))
     } catch {
@@ -969,14 +1061,14 @@ function openFileInput() {
 }
 
 function onFileSelected(e) {
-  const file = e.target.files?.[0]
-  if (!file) return
-  pendingFile.value = file
+  const files = Array.from(e.target.files || [])
+  if (!files.length) return
+  pendingFiles.value = [...pendingFiles.value, ...files]
   e.target.value = ''  // 允許同一個檔案再次選取
 }
 
-function removePendingFile() {
-  pendingFile.value = null
+function removePendingFile(index) {
+  pendingFiles.value = pendingFiles.value.filter((_, i) => i !== index)
 }
 
 function handleAttachCommand(cmd) {
@@ -1007,29 +1099,40 @@ function stopStreaming() {
 // ── Send ──────────────────────────────────────────────────────
 async function sendMessage() {
   const text = inputText.value.trim()
-  if (!text && !pendingFile.value) return
+  if (!text && !pendingFiles.value.length) return
   if (streaming.value) return
-  if (text) messages.value.push({ role: 'user', content: text })
-  else messages.value.push({ role: 'user', content: `📎 ${pendingFile.value.name}` })
+  const files = pendingFiles.value.slice()
+  const userMsg = { role: 'user', content: text }
+  if (files.length) {
+    userMsg.attachments = files.map(f => ({
+      name: f.name,
+      size: f.size,
+      objectUrl: URL.createObjectURL(f),
+    }))
+  }
+  messages.value.push(userMsg)
   inputText.value = ''
   scrollToBottom()
-  await runChat(text)
+  await runChat(text, files)
 }
 
-async function runChat(text) {
+function openAttachment(attachment) {
+  if (attachment.objectUrl) window.open(attachment.objectUrl, '_blank')
+}
+
+async function runChat(text, filesToSend = []) {
   const aiMsg = { role: 'assistant', content: '', sources: [], streaming: true }
   messages.value.push(aiMsg)
   streaming.value = true
   abortController = new AbortController()
-  const fileToSend = pendingFile.value
-  pendingFile.value = null  // 送出前清空附件
+  pendingFiles.value = []  // 送出前清空附件
   try {
     const docIds = attachedDocs.value.map(d => d.id)
     const kbScopeId = convScope.mode === 'kb' ? convScope.kbScopeId : null
     const docScopeIds = convScope.mode === 'docs' ? convScope.docScopeIds : []
     const tagScopeIds = convScope.tagScopeIds || []
-    const resp = fileToSend
-      ? await chatStreamWithFile(text, currentConvId.value, selectedModel.value || null, fileToSend, abortController.signal, docIds, kbScopeId, docScopeIds, tagScopeIds, 'chat', chatMode.value)
+    const resp = filesToSend.length
+      ? await chatStreamWithFile(text, currentConvId.value, selectedModel.value || null, filesToSend, abortController.signal, docIds, kbScopeId, docScopeIds, tagScopeIds, 'chat', chatMode.value)
       : await chatStream(text, currentConvId.value, selectedModel.value || null, abortController.signal, docIds, kbScopeId, docScopeIds, tagScopeIds, 'chat', chatMode.value)
     if (!resp.ok) { aiMsg.content = '⚠️ 請求失敗，請重試'; return }
     // backend 把新建的 conv_id 放在 X-Conversation-Id header
@@ -1058,10 +1161,11 @@ async function runChat(text) {
           }
           else if (evt.type === 'action' && evt.action === 'import_excel') {
             // AI 建議匯入 Excel → 自動呼叫 import-excel API
-            if (fileToSend) {
+            const excelFile = filesToSend.find(f => /\.(xlsx|xls|csv)$/i.test(f.name))
+            if (excelFile) {
               try {
                 const { docsApi: _docsApi } = await import('../api/index.js')
-                const res = await _docsApi.importExcel(fileToSend)
+                const res = await _docsApi.importExcel(excelFile)
                 const note = `\n\n> ✅ 已排入 **${res.queued}** 筆連結，跳過 **${res.skipped}** 筆。`
                 aiMsg.content += note
               } catch (ie) {
@@ -1491,12 +1595,37 @@ onUnmounted(() => {
 .model-option-name { font-weight: 600; font-size: 13px; color: #303133; }
 .model-option-desc { font-size: 11px; color: #909399; margin-top: 1px; }
 .model-check { color: #409eff; font-size: 14px; flex-shrink: 0; margin-left: 8px; }
+/* 雲端模型行 */
+.cloud-model-option { gap: 4px; }
+.model-delete-btn {
+  flex-shrink: 0; display: flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; border: none; background: transparent; border-radius: 4px;
+  color: #c0c4cc; cursor: pointer; opacity: 0; transition: opacity 0.15s, color 0.15s;
+}
+.cloud-model-option:hover .model-delete-btn { opacity: 1; }
+.model-delete-btn:hover { color: #f56c6c !important; background: #fff0f0; }
+.model-section-footer { padding: 6px 0 2px; border-top: 1px solid #f0f2f5; margin-top: 4px; }
+.model-add-cloud-btn {
+  width: 100%; padding: 5px 0; border: 1px dashed #dcdfe6; border-radius: 6px;
+  background: transparent; color: #409eff; font-size: 12px; cursor: pointer;
+  transition: background 0.15s;
+}
+.model-add-cloud-btn:hover { background: #ecf5ff; }
+/* Cloud Model Hub 小彈窗 */
+.chat-hub-group { margin-bottom: 18px; }
+.chat-hub-provider-title { font-weight: 600; font-size: 13px; color: #606266; margin-bottom: 8px; }
+.chat-hub-cards { display: flex; flex-direction: column; gap: 6px; }
+.chat-hub-card {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 12px; background: #f8fafc; border: 1px solid #e8edf3; border-radius: 8px;
+}
+.chat-hub-card-name { font-size: 13px; color: #303133; font-weight: 500; }
 
 /* ── 附件預覽 / attached docs ────────────────────────────────── */
 .attached-docs { display: flex; flex-wrap: wrap; gap: 6px; }
 .pending-file-preview {
   display: flex;
-  align-items: center;
+  flex-direction: column;
   gap: 4px;
   padding: 5px 10px;
   background: #f0f7ff;
@@ -1505,6 +1634,11 @@ onUnmounted(() => {
   margin-bottom: 6px;
   font-size: 12px;
   color: #409eff;
+}
+.pending-file-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 .pending-file-icon { font-size: 14px; }
 .pending-file-name { font-weight: 600; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1553,6 +1687,19 @@ onUnmounted(() => {
 }
 .user-bubble { background: #4a90d9; color: #fff; border-bottom-right-radius: 3px; white-space: pre-wrap; }
 .ai-bubble { background: #f8fafc; border: 1px solid #e8edf3; color: #1e293b; border-bottom-left-radius: 3px; min-width: 120px; }
+
+/* ── User msg wrap (text + attachment) ──────────────────────── */
+.user-msg-wrap { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+.msg-attachment-badge {
+  display: inline-flex; align-items: center; gap: 5px;
+  background: rgba(255,255,255,0.15); border: 1px solid rgba(255,255,255,0.4);
+  border-radius: 8px; padding: 5px 12px;
+  font-size: 12px; color: #fff; cursor: pointer; user-select: none;
+  max-width: 280px; transition: background 0.15s;
+}
+.msg-attachment-badge:hover { background: rgba(255,255,255,0.28); }
+.attach-badge-name { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 160px; }
+.attach-badge-size { opacity: 0.75; flex-shrink: 0; }
 
 /* ── Thinking dots ───────────────────────────────────────────── */
 .thinking { display: flex; gap: 5px; padding: 4px 2px; align-items: center; }
@@ -1704,5 +1851,97 @@ onUnmounted(() => {
 :deep(.hljs-addition) { color: #7ee787; background: #04260f; }
 :deep(.hljs-emphasis) { font-style: italic; }
 :deep(.hljs-strong) { font-weight: bold; }
+
+/* ── Mobile chat header (desktop 隱藏) ───────────────────────── */
+.mobile-chat-header { display: none; }
+
+/* ── Mobile layout ───────────────────────────────────────────── */
+@media (max-width: 768px) {
+  /* Sidebar → fixed 覆蓋層 */
+  .chat-sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    height: 100%;
+    width: 260px;
+    z-index: 100;
+    transform: translateX(-100%);
+    transition: transform 0.25s ease;
+    box-shadow: none;
+  }
+  .chat-sidebar.chat-sidebar--mobile-open {
+    transform: translateX(0);
+    box-shadow: 4px 0 20px rgba(0,0,0,0.2);
+  }
+
+  /* 遮罩層 */
+  .mobile-sidebar-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.35);
+    z-index: 99;
+  }
+
+  /* Mobile header bar */
+  .mobile-chat-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    border-bottom: 1px solid #e2e8f0;
+    background: #fff;
+    flex-shrink: 0;
+  }
+  .mobile-sidebar-toggle {
+    width: 32px;
+    height: 32px;
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    color: #475569;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 6px;
+    flex-shrink: 0;
+  }
+  .mobile-sidebar-toggle:hover { background: #f1f5f9; }
+  .mobile-chat-title {
+    font-size: 14px;
+    font-weight: 500;
+    color: #1e293b;
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* 隱藏 hint 文字 */
+  .input-hint { display: none; }
+
+  /* 模式按鈕：只顯示 icon，隱藏文字 */
+  .chat-mode-btn .mode-label { display: none; }
+  .chat-mode-btn { padding: 0 8px; }
+
+  /* Home state 縮緊 */
+  .chat-home { padding: 20px 14px; gap: 16px; }
+  .home-title { font-size: 22px; }
+  .home-greeting { gap: 8px; }
+  .quick-prompts { display: none; }
+
+  /* Input footer：不要換行，緊湊排列 */
+  .input-footer { flex-wrap: nowrap; gap: 6px; }
+  .footer-left { gap: 6px; flex-wrap: nowrap; }
+
+  /* 模型選擇器：限制最大寬度 */
+  .model-trigger-name {
+    max-width: 72px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    display: inline-block;
+    vertical-align: middle;
+  }
+}
 </style>
 

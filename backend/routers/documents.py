@@ -1326,10 +1326,12 @@ async def download_document(
         "csv": "text/csv",
     }
     ct = content_type_map.get(doc.file_type or "", "application/octet-stream")
+    from urllib.parse import quote as url_quote
+    encoded_name = url_quote(doc.title or "file", safe="")
     return Response(
         content=data,
         media_type=ct,
-        headers={"Content-Disposition": f'inline; filename="{doc.title}"'},
+        headers={"Content-Disposition": f"inline; filename*=UTF-8''{encoded_name}"},
     )
 
 

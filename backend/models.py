@@ -410,3 +410,81 @@ class InviteToken(Base):
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+# ── 共享硬碟模組 ────────────────────────────────────────────────
+
+class Folder(Base):
+    """共享硬碟資料夾（獨立於知識庫，支援階層與白名單）"""
+    __tablename__ = "folders"
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=_uuid)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    parent_id: Mapped[str | None] = mapped_column(
+        ForeignKey("folders.id", ondelete="CASCADE"), nullable=True
+    )
+    icon: Mapped[str | None] = mapped_column(String(50), default="📁")
+    color: Mapped[str | None] = mapped_column(String(20), default="#2563eb")
+    created_by: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    children: Mapped[list["Folder"]] = relationship(
+        "Folder", back_populates="parent", foreign_keys="Folder.parent_id"
+    )
+    parent: Mapped["Folder | None"] = relationship(
+        "Folder", back_populates="children",
+        remote_side="Folder.id", foreign_keys="Folder.parent_id"
+    )
+    doc_assoc: Mapped[list["FolderDocument"]] = relationship(
+        "FolderDocument", back_populates="folder", cascade="all, delete"
+    )
+    permissions: Mapped[list["FolderPermission"]] = relationship(
+        "FolderPermission", back_populates="folder", cascade="all, delete"
+    )
+
+
+class FolderDocument(Base):
+    """資料夾與文件的多對多關聯"""
+    __tablename__ = "folder_documents"
+
+    folder_id: Mapped[str] = mapped_column(
+        ForeignKey("folders.id", ondelete="CASCADE"), primary_key=True
+    )
+    doc_id: Mapped[str] = mapped_column(
+        ForeignKey("documents.id", ondelete="CASCADE"), primary_key=True
+    )
+    added_by: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    added_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    folder: Mapped["Folder"] = relationship("Folder", back_populates="doc_assoc")
+    document: Mapped["Document"] = relationship("Document")
+
+
+class FolderPermission(Base):
+    """資料夾白名單（授父層自動繼承至子層）"""
+    __tablename__ = "folder_permissions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    folder_id: Mapped[str] = mapped_column(
+        ForeignKey("folders.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    permission: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="read"
+    )  # "read" | "write" | "manage"
+    granted_by: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    granted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    folder: Mapped["Folder"] = relationship("Folder", back_populates="permissions")

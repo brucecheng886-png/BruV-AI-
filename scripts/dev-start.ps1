@@ -115,7 +115,8 @@ if ($dcExit -ne 0) {
         Write-Warn "容器已存在（project 名稱不符），嘗試直接啟動..."
         $allContainers = @(
             'bruv_ai_postgres','bruv_ai_redis','bruv_ai_qdrant','bruv_ai_minio',
-            'bruv_ai_ollama','bruv_ai_neo4j','bruv_ai_backend','bruv_ai_celery','bruv_ai_playwright'
+            'bruv_ai_ollama','bruv_ai_neo4j','bruv_ai_backend','bruv_ai_celery','bruv_ai_playwright',
+            'bruv_ai_nginx'
         )
         docker start @allContainers 2>&1 | Out-Null
         Start-Sleep 2

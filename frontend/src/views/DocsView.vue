@@ -1,10 +1,17 @@
 <template>
   <div class="docs-root">
+    <!-- Mobile sidebar overlay -->
+    <div v-if="mobileSidebarOpen" class="mobile-sidebar-overlay" @click="mobileSidebarOpen = false" />
+
     <!-- KB Sidebar -->
-    <aside class="kb-sidebar">
+    <aside class="kb-sidebar" :class="{ 'kb-sidebar--open': mobileSidebarOpen, 'kb-sidebar--collapsed': sidebarCollapsed }">
       <div class="kb-sidebar-header">
         <span class="kb-sidebar-title">知識庫</span>
         <el-button circle size="small" @click="openKbDialog(null)"><Plus :size="14" :stroke-width="1.5" /></el-button>
+        <button class="kb-close-btn" @click="mobileSidebarOpen = false"><X :size="16" :stroke-width="2" /></button>
+        <button class="sidebar-toggle-btn" @click="sidebarCollapsed = !sidebarCollapsed">
+          <Menu :size="15" :stroke-width="1.5" />
+        </button>
       </div>
 
       <ul class="kb-list">
@@ -67,6 +74,21 @@
           </ul>
         </li>
       </ul>
+
+      <!-- 共享硬碟 -->
+      <div class="shared-drive-section">
+        <FolderTree
+          ref="folderTreeRef"
+          :selected-id="selectedFolderId"
+          :is-admin="currentUserRole === 'admin'"
+          @folder-selected="onFolderSelected"
+          @enter-drive="enterSharedDrive"
+          @create-folder="openFolderCreateDialog"
+          @rename="openFolderRename"
+          @share="openFolderShare"
+          @delete-folder="deleteFolderById"
+        />
+      </div>
 
       <!-- Tag Filter -->
       <div v-if="tags.length > 0" class="tag-filter">
@@ -195,6 +217,20 @@
     <!-- Main Content -->
     <main class="docs-main" :style="{ marginRight: panelOpen ? (panelWidth + 16) + 'px' : '0' }">
 
+      <!-- 共享硬碟模式 — 完整接管主區 -->
+      <SharedDriveView
+        v-if="sharedDriveMode"
+        :initial-folder-id="selectedFolderId"
+        :is-admin="currentUserRole === 'admin'"
+        @folder-navigate="onDriveNavigate"
+        @reload-tree="folderTreeRef?.reload()"
+        @open-doc="openPanel"
+        style="flex:1;min-height:0;"
+      />
+
+      <!-- 一般文件管理模式 -->
+      <template v-else>
+
       <!-- 麵包屑（主內容區頂部，獨立一列） -->
       <div class="main-breadcrumb">
         <span class="mbc-base">文件管理</span>
@@ -210,6 +246,11 @@
 
       <!-- Toolbar -->
       <div class="docs-toolbar">
+
+        <!-- Mobile hamburger -->
+        <button class="mobile-menu-btn" @click="mobileSidebarOpen = true">
+          <Menu :size="18" :stroke-width="1.5" />
+        </button>
 
         <!-- 搜尋列（左側，佔滿剩餘空間） -->
         <div class="search-bar">
@@ -695,6 +736,8 @@
           />
         </div>
       </div>
+
+      </template><!-- end v-else (normal mode) -->
     </main>
 
     <!-- Right Detail Panel -->
@@ -710,6 +753,17 @@
             <div class="panel-title" :title="panelDoc.title">{{ panelDoc.title }}</div>
             <el-tag :type="statusTagType(panelDoc.status)" size="small">{{ statusLabel(panelDoc.status) }}</el-tag>
           </div>
+          <el-button
+            size="small"
+            type="primary"
+            plain
+            :loading="previewing"
+            @click="previewDocument"
+            title="在瀏覽器中預覽原始檔"
+            style="flex-shrink:0;"
+          >
+            <Eye :size="13" :stroke-width="1.5" style="margin-right:3px;" />預覽
+          </el-button>
           <el-button link @click="closePanel"><X :size="16" :stroke-width="1.5" /></el-button>
         </div>
 
@@ -736,13 +790,30 @@
                   <div class="ov-field">
                     <div class="ov-label">來源連結</div>
                     <div v-if="panelDoc.source_url" class="ov-url-row">
-                      <el-link :href="panelDoc.source_url" target="_blank" type="primary" class="ov-url-link">
-                        {{ panelDoc.source_url }}
-                      </el-link>
-                      <el-button link size="small" @click="copySourceUrl(panelDoc.source_url)"
-                        style="flex-shrink:0;padding:0 4px;">
-                        <Copy :size="13" :stroke-width="1.5" />
-                      </el-button>
+                      <!-- 真實 URL → 外部連結 -->
+                      <template v-if="panelDoc.source_url.startsWith('http')">
+                        <el-link :href="panelDoc.source_url" target="_blank" type="primary" class="ov-url-link">
+                          {{ panelDoc.source_url }}
+                        </el-link>
+                        <el-button link size="small" @click="copySourceUrl(panelDoc.source_url)"
+                          style="flex-shrink:0;padding:0 4px;">
+                          <Copy :size="13" :stroke-width="1.5" />
+                        </el-button>
+                      </template>
+                      <!-- 原始檔名 → 走下載 API 在瀏覽器開啟 -->
+                      <template v-else>
+                        <span class="ov-url-filename">{{ panelDoc.source_url }}</span>
+                        <el-button
+                          link
+                          size="small"
+                          type="primary"
+                          :loading="previewing"
+                          @click="previewDocument"
+                          style="flex-shrink:0;padding:0 6px;"
+                        >
+                          <Eye :size="13" :stroke-width="1.5" style="margin-right:3px;" />在瀏覽器開啟
+                        </el-button>
+                      </template>
                     </div>
                     <span v-else class="ov-val-muted">—</span>
                   </div>
@@ -1252,6 +1323,47 @@
         </el-button>
       </template>
     </el-dialog>
+
+    <!-- 共享硬碟 — 建立 / 重新命名資料夾 Dialog -->
+    <el-dialog
+      v-model="folderDialogVisible"
+      :title="folderDialogMode === 'create' ? '新增資料夾' : '重新命名'"
+      width="380px"
+      destroy-on-close
+    >
+      <el-form @submit.prevent label-width="70px">
+        <el-form-item label="名稱">
+          <el-input v-model="folderForm.name" placeholder="資料夾名稱" maxlength="80" autofocus />
+        </el-form-item>
+        <el-form-item label="圖示">
+          <el-input v-model="folderForm.icon" placeholder="📁" maxlength="4" style="width:80px;margin-right:8px;" />
+          <span style="font-size:22px;">{{ folderForm.icon }}</span>
+        </el-form-item>
+        <el-form-item label="色彩">
+          <div class="color-swatches">
+            <div
+              v-for="c in COLOR_PRESETS"
+              :key="c"
+              class="swatch"
+              :style="{ background: c, outline: folderForm.color === c ? '3px solid #1e293b' : '' }"
+              @click="folderForm.color = c"
+            />
+          </div>
+        </el-form-item>
+        <el-form-item label="說明">
+          <el-input v-model="folderForm.description" type="textarea" :rows="2" placeholder="選填說明" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="folderDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="folderSaving" @click="submitFolderDialog">
+          {{ folderDialogMode === 'create' ? '建立' : '儲存' }}
+        </el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 共享硬碟 — 白名單 Dialog -->
+    <FolderShareDialog v-model="folderShareVisible" :folder="sharingFolder" />
   </div>
 </template>
 
@@ -1261,10 +1373,13 @@ import {
   Upload, Link, LayoutGrid, List, Share2, Trash2, Search, Plus, Tag,
   CheckSquare, X, Settings2, Check, MoreHorizontal, FolderInput, RefreshCw,
   Eye, Loader2, FileText, FileSpreadsheet, Globe, ChevronRight, ChevronDown,
-  Database, FileStack, Copy, Zap, SendHorizontal, Sparkles, Download
+  Database, FileStack, Copy, Zap, SendHorizontal, Sparkles, Download, HardDrive, Menu
 } from 'lucide-vue-next'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { docsApi, kbApi, tagsApi, wikiApi } from '../api/index.js'
+import { docsApi, kbApi, tagsApi, wikiApi, foldersApi } from '../api/index.js'
+import FolderTree from '../components/FolderTree.vue'
+import FolderShareDialog from '../components/FolderShareDialog.vue'
+import SharedDriveView from '../components/SharedDriveView.vue'
 
 const pageSize = ref(25)
 const CHUNK_PAGE_SIZE = 50
@@ -1489,6 +1604,8 @@ const panelDoc = ref(null)
 const panelTab = ref('info')
 const panelRef = ref(null)
 const panelOpen = ref(false)
+const mobileSidebarOpen = ref(false)
+const sidebarCollapsed = ref(false)
 const panelWidth = ref(380)
 const PANEL_MIN_W = 280
 const PANEL_MAX_W = 1200
@@ -1543,6 +1660,7 @@ const sheetExpanded = ref(false)
 // 試算表
 const sheetLoading = ref(false)
 const downloadingXlsx = ref(false)
+const previewing = ref(false)
 const sheetError = ref('')
 const sheetNames = ref([])
 const sheetHtml = ref({})
@@ -2068,6 +2186,7 @@ async function removeTagFromDocByName(tagName, doc) {
 }
 
 function selectKb(id) {
+  sharedDriveMode.value = false
   trashMode.value = false
   selectedDocs.value = new Set()
   selectedKbId.value = id
@@ -2078,6 +2197,7 @@ function selectKb(id) {
 }
 
 function selectTrash() {
+  sharedDriveMode.value = false
   trashMode.value = true
   selectedDocs.value = new Set()
   selectedKbId.value = null
@@ -2647,6 +2767,33 @@ async function downloadXlsx() {
   }
 }
 
+async function previewDocument() {
+  if (!panelDoc.value || previewing.value) return
+  previewing.value = true
+  try {
+    const arrayBuffer = await docsApi.download(panelDoc.value.doc_id)
+    const mimeMap = {
+      pdf:  'application/pdf',
+      txt:  'text/plain',
+      md:   'text/plain',
+      html: 'text/html',
+      csv:  'text/csv',
+      docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    }
+    const ext = panelDoc.value.file_type || ''
+    const mime = mimeMap[ext] || 'application/octet-stream'
+    const blob = new Blob([arrayBuffer], { type: mime })
+    const url = URL.createObjectURL(blob)
+    window.open(url, '_blank')
+    setTimeout(() => URL.revokeObjectURL(url), 60000)
+  } catch (e) {
+    ElMessage.error(e.message || '無法開啟預覽')
+  } finally {
+    previewing.value = false
+  }
+}
+
 async function loadSheet() {
   if (!panelDoc.value) return
   sheetLoading.value = true
@@ -2821,6 +2968,115 @@ function statusLabel(s) {
 function statusTagType(s) {
   return { ready: 'success', done: 'success', processing: 'warning', pending: 'info', failed: 'danger' }[s] || 'info'
 }
+
+// ── 共享硬碟 ────────────────────────────────────────────────────
+const folderTreeRef = ref(null)
+const selectedFolderId = ref(null)
+const sharedDriveMode = ref(false)
+const folderDialogVisible = ref(false)
+const folderDialogMode = ref('create') // 'create' | 'rename'
+const folderSaving = ref(false)
+const folderForm = ref({ name: '', icon: '📁', color: '#2563eb', description: '' })
+const folderFormTarget = ref(null) // 重新命名時的目標資料夾
+const folderFormParentId = ref(null) // 建立時的父層 id
+const folderShareVisible = ref(false)
+const sharingFolder = ref(null)
+
+// 取得目前使用者 role（用於判斷 admin）
+const currentUserRole = computed(() => {
+  try {
+    const token = localStorage.getItem('token') || sessionStorage.getItem('token')
+    if (!token) return 'user'
+    const payload = JSON.parse(atob(token.split('.')[1]))
+    return payload.role || 'user'
+  } catch {
+    return 'user'
+  }
+})
+
+function onFolderSelected(folder) {
+  selectedFolderId.value = folder.id
+  sharedDriveMode.value = true
+}
+
+function enterSharedDrive() {
+  sharedDriveMode.value = true
+  selectedFolderId.value = null
+  selectedKbId.value = null
+  trashMode.value = false
+}
+
+function onDriveNavigate(folderId) {
+  selectedFolderId.value = folderId
+  folderTreeRef.value?.reload()
+}
+
+function openFolderCreateDialog(parentId) {
+  folderDialogMode.value = 'create'
+  folderFormParentId.value = parentId
+  folderForm.value = { name: '', icon: '📁', color: '#2563eb', description: '' }
+  folderDialogVisible.value = true
+}
+
+function openFolderRename(folder) {
+  folderDialogMode.value = 'rename'
+  folderFormTarget.value = folder
+  folderForm.value = { name: folder.name, icon: folder.icon || '📁', color: folder.color || '#2563eb', description: folder.description || '' }
+  folderDialogVisible.value = true
+}
+
+function openFolderShare(folder) {
+  sharingFolder.value = folder
+  folderShareVisible.value = true
+}
+
+async function submitFolderDialog() {
+  if (!folderForm.value.name.trim()) {
+    ElMessage.warning('請輸入資料夾名稱')
+    return
+  }
+  folderSaving.value = true
+  try {
+    if (folderDialogMode.value === 'create') {
+      await foldersApi.create({
+        name: folderForm.value.name.trim(),
+        icon: folderForm.value.icon,
+        color: folderForm.value.color,
+        description: folderForm.value.description,
+        parent_id: folderFormParentId.value,
+      })
+      ElMessage.success('資料夾已建立')
+    } else {
+      await foldersApi.update(folderFormTarget.value.id, {
+        name: folderForm.value.name.trim(),
+        icon: folderForm.value.icon,
+        color: folderForm.value.color,
+        description: folderForm.value.description,
+      })
+      ElMessage.success('已重新命名')
+    }
+    folderDialogVisible.value = false
+    folderTreeRef.value?.reload()
+  } catch (e) {
+    ElMessage.error(e.message || '操作失敗')
+  } finally {
+    folderSaving.value = false
+  }
+}
+
+async function deleteFolderById(folder) {
+  try {
+    await ElMessageBox.confirm(
+      `確定刪除資料夾「${folder.name}」？（資料夾內的文件不會被刪除）`,
+      '刪除資料夾',
+      { type: 'warning', confirmButtonText: '確定刪除', cancelButtonText: '取消' }
+    )
+    await foldersApi.delete(folder.id)
+    if (selectedFolderId.value === folder.id) selectedFolderId.value = null
+    ElMessage.success('資料夾已刪除')
+    folderTreeRef.value?.reload()
+  } catch {}
+}
 </script>
 
 <style scoped>
@@ -2844,11 +3100,12 @@ function statusTagType(s) {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  transition: width 0.25s ease, min-width 0.25s ease;
 }
 .kb-sidebar-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 4px;
   padding: 16px 16px 8px;
 }
 .kb-sidebar-title {
@@ -2857,6 +3114,7 @@ function statusTagType(s) {
   color: #64748b;
   text-transform: uppercase;
   letter-spacing: 0.05em;
+  flex: 1;
 }
 .kb-list {
   list-style: none;
@@ -2892,6 +3150,12 @@ function statusTagType(s) {
 .kb-more { opacity: 0; transition: opacity 0.15s; color: #94a3b8; cursor: pointer; }
 .kb-item:hover .kb-more { opacity: 1; }
 .kb-sidebar-footer { padding: 12px; border-top: 1px solid #e2e8f0; display: flex; flex-direction: column; gap: 6px; }
+
+/* 共享硬碟區塊 */
+.shared-drive-section {
+  border-top: 1px solid #e2e8f0;
+  padding-top: 4px;
+}
 /* lucide 圖示取代 emoji */
 .kb-icon-lucide { flex-shrink: 0; color: #94a3b8; }
 .kb-item.active .kb-icon-lucide { color: #1d4ed8; }
@@ -3804,6 +4068,13 @@ function statusTagType(s) {
   word-break: break-all;
   line-height: 1.4;
 }
+.ov-url-filename {
+  font-size: 12px;
+  color: #475569;
+  word-break: break-all;
+  line-height: 1.4;
+  flex: 1;
+}
 
 /* KB 行 */
 .ov-kb-row {
@@ -3939,5 +4210,141 @@ function statusTagType(s) {
 .smart-edit__cover {
   max-width:240px; max-height:140px; object-fit:cover;
   border-radius:6px; border:1px solid #e2e8f0;
+}
+
+/* ── Mobile layout ── */
+.mobile-sidebar-overlay {
+  display: none;
+}
+.mobile-menu-btn {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #fff;
+  color: #475569;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.mobile-menu-btn:hover { background: #f1f5f9; }
+.kb-close-btn {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: transparent;
+  color: #94a3b8;
+  cursor: pointer;
+  border-radius: 6px;
+  padding: 0;
+}
+.kb-close-btn:hover { background: #e2e8f0; color: #475569; }
+
+/* Sidebar collapse toggle button (desktop) */
+.sidebar-toggle-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  background: transparent;
+  color: #94a3b8;
+  cursor: pointer;
+  border-radius: 6px;
+  padding: 0;
+  flex-shrink: 0;
+  transition: background 0.15s, color 0.15s;
+}
+.sidebar-toggle-btn:hover { background: #e2e8f0; color: #475569; }
+
+/* Collapsed sidebar state */
+.kb-sidebar--collapsed {
+  width: 40px;
+  min-width: 40px;
+}
+.kb-sidebar--collapsed .kb-sidebar-header {
+  justify-content: center;
+  padding: 12px 0;
+  gap: 0;
+}
+.kb-sidebar--collapsed .kb-sidebar-title,
+.kb-sidebar--collapsed .kb-list,
+.kb-sidebar--collapsed .shared-drive-section,
+.kb-sidebar--collapsed .tag-filter,
+.kb-sidebar--collapsed .tag-batch-bar,
+.kb-sidebar--collapsed .tag-chips,
+.kb-sidebar--collapsed .pending-review-block,
+.kb-sidebar--collapsed .kb-sidebar-footer,
+.kb-sidebar--collapsed .el-button {
+  display: none;
+}
+.kb-sidebar--collapsed .sidebar-toggle-btn {
+  color: #475569;
+}
+
+@media (max-width: 768px) {
+  .kb-sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    height: 100%;
+    z-index: 300;
+    transform: translateX(-100%);
+    transition: transform 0.25s ease;
+    box-shadow: none;
+    width: 260px;
+    min-width: 260px;
+  }
+  .kb-sidebar--open {
+    transform: translateX(0);
+    box-shadow: 4px 0 24px rgba(0,0,0,0.18);
+  }
+  .mobile-sidebar-overlay {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.35);
+    z-index: 299;
+  }
+  .mobile-menu-btn {
+    display: flex;
+  }
+  .kb-close-btn {
+    display: flex;
+  }
+  .sidebar-toggle-btn {
+    display: none;
+  }
+  .search-bar {
+    width: auto;
+    flex: 1;
+    min-width: 0;
+  }
+  .docs-toolbar {
+    padding: 8px 12px;
+    gap: 8px;
+  }
+  .main-breadcrumb {
+    padding: 8px 12px 0;
+  }
+  .docs-content {
+    padding: 12px;
+  }
+  .grid-cards {
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 12px;
+  }
+  .docs-main {
+    margin-right: 0 !important;
+  }
+  .table-view {
+    overflow-x: auto;
+  }
 }
 </style>

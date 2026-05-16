@@ -19,79 +19,47 @@
               <Cpu :size="16" :stroke-width="1.5" class="section-icon" />
               <span>模型管理</span>
             </span>
-            <el-dropdown trigger="click" @command="onModelMenuCommand">
-              <el-button type="primary" size="small">
+            <el-button type="primary" size="small" @click="openModelHub">
                 新增模型
                 <el-icon style="margin-left:4px;"><ArrowDown /></el-icon>
               </el-button>
-              <template #dropdown>
-                <el-dropdown-menu>
-                  <el-dropdown-item command="manual">手動輸入模型資訊</el-dropdown-item>
-                  <el-dropdown-item command="hub" divided>
-                    <Download :size="13" :stroke-width="1.5" style="margin-right:4px;vertical-align:middle" />從 Ollama 瀏覽下載
-                  </el-dropdown-item>
-                </el-dropdown-menu>
-              </template>
-            </el-dropdown>
           </div>
           <div class="section-body">
             <!-- 地端 Chat 模型 -->
             <div class="model-group-title">地端模型</div>
-            <el-table :data="models.filter(m => m.provider === 'ollama')" v-loading="loading" stripe style="width:100%;" empty-text="尚無地端模型">
-              <el-table-column label="名稱" prop="name" min-width="160" />
-              <el-table-column label="類型" width="100" align="center">
-                <template #default="{ row }">
-                  <el-tag size="small"
-                    :type="row.model_type === 'embedding' ? 'success' : row.model_type === 'rerank' ? 'warning' : ''">
-                    {{ row.model_type || 'chat' }}
-                  </el-tag>
-                </template>
-              </el-table-column>
-              <el-table-column label="Provider" min-width="120">
-                <template #default="{ row }">
-                  {{ PROVIDER_DEFS.find(p => p.key === row.provider)?.name || row.provider || '-' }}
-                </template>
-              </el-table-column>
-              <el-table-column label="Max tokens" width="110" align="center">
-                <template #default="{ row }">{{ row.max_tokens ? row.max_tokens.toLocaleString() : '-' }}</template>
-              </el-table-column>
-              <el-table-column label="Vision" width="70" align="center">
-                <template #default="{ row }">
-                  <el-icon v-if="row.vision_support" color="#67c23a"><Check /></el-icon>
-                  <span v-else style="color:#ccc;">—</span>
-                </template>
-              </el-table-column>
-              <el-table-column label="Context" width="90" align="center">
-                <template #default="{ row }">{{ row.context_length ? row.context_length.toLocaleString() : '-' }}</template>
-              </el-table-column>
-              <el-table-column label="啟用" width="70" align="center">
-                <template #default="{ row }">
-                  <el-switch :model-value="row.enabled" @change="(v) => toggleEnabled(row, v)" />
-                </template>
-              </el-table-column>
-              <el-table-column label="預設" width="70" align="center">
-                <template #default="{ row }">
-                  <el-tag v-if="row.is_default" type="success" size="small">預設</el-tag>
-                  <el-button v-else size="small" plain @click="setDefault(row)">設為</el-button>
-                </template>
-              </el-table-column>
-              <el-table-column label="月度上限 (USD)" width="110" align="center">
-                <template #default="{ row }">
-                  <span v-if="row.monthly_quota_usd != null">${{ Number(row.monthly_quota_usd).toFixed(2) }}</span>
-                  <span v-else style="color:#ccc;">—</span>
-                </template>
-              </el-table-column>
-              <el-table-column label="操作" width="120" align="center">
-                <template #default="{ row }">
-                  <el-button size="small" type="primary" plain @click="openEdit(row)">編輯</el-button>
+            <div v-if="loading" style="padding:20px;text-align:center;"><el-icon class="is-loading" :size="22"><Loading /></el-icon></div>
+            <div v-else-if="models.filter(m => m.provider === 'ollama').length === 0" class="model-empty">尚無地端模型</div>
+            <div v-else class="model-cards">
+              <div v-for="row in models.filter(m => m.provider === 'ollama')" :key="row.id" class="model-card">
+                <div class="mc-actions">
+                  <button class="mc-btn mc-edit" @click="openEdit(row)" title="編輯"><PenLine :size="13" :stroke-width="1.8" /></button>
                   <el-popconfirm title="刪除此模型？" @confirm="deleteModel(row.id)">
                     <template #reference>
-                      <el-button size="small" type="danger" plain>刪</el-button>
+                      <button class="mc-btn mc-del" title="刪除"><Trash2 :size="13" :stroke-width="1.8" /></button>
                     </template>
                   </el-popconfirm>
-                </template>
-              </el-table-column>
-            </el-table>
+                </div>
+                <div class="mc-top">
+                  <HardDrive :size="20" :stroke-width="1.4" class="mc-icon" />
+                  <div class="mc-name" :title="row.name">{{ row.name }}</div>
+                </div>
+                <div class="mc-tags">
+                  <el-tag size="small" :type="row.model_type === 'embedding' ? 'success' : row.model_type === 'rerank' ? 'warning' : ''">{{ row.model_type || 'chat' }}</el-tag>
+                  <el-tag v-if="row.vision_support" size="small" type="info">Vision</el-tag>
+                </div>
+                <div class="mc-meta">
+                  <span class="mc-meta-item">{{ PROVIDER_DEFS.find(p => p.key === row.provider)?.name || row.provider || '-' }}</span>
+                  <span v-if="row.context_length" class="mc-meta-item">{{ (row.context_length / 1000).toFixed(0) }}K ctx</span>
+                  <span v-if="row.max_tokens" class="mc-meta-item">{{ (row.max_tokens / 1000).toFixed(0) }}K out</span>
+                  <span v-if="row.monthly_quota_usd != null" class="mc-meta-item mc-quota">${{ Number(row.monthly_quota_usd).toFixed(0) }}/月</span>
+                </div>
+                <div class="mc-footer">
+                  <el-switch :model-value="row.enabled" size="small" @change="(v) => toggleEnabled(row, v)" />
+                  <el-tag v-if="row.is_default" type="success" size="small">預設</el-tag>
+                  <el-button v-else size="small" plain style="height:22px;padding:0 8px;font-size:11px;" @click="setDefault(row)">設為預設</el-button>
+                </div>
+              </div>
+            </div>
 
             <el-divider />
 
@@ -129,61 +97,39 @@
 
             <!-- 雲端模型 -->
             <div class="model-group-title">雲端模型</div>
-            <el-table :data="models.filter(m => m.provider !== 'ollama')" v-loading="loading" stripe style="width:100%;" empty-text="尚無雲端模型">
-              <el-table-column label="名稱" prop="name" min-width="160" />
-              <el-table-column label="類型" width="100" align="center">
-                <template #default="{ row }">
-                  <el-tag size="small"
-                    :type="row.model_type === 'embedding' ? 'success' : row.model_type === 'rerank' ? 'warning' : ''">
-                    {{ row.model_type || 'chat' }}
-                  </el-tag>
-                </template>
-              </el-table-column>
-              <el-table-column label="Provider" min-width="120">
-                <template #default="{ row }">
-                  {{ PROVIDER_DEFS.find(p => p.key === row.provider)?.name || row.provider || '-' }}
-                </template>
-              </el-table-column>
-              <el-table-column label="Max tokens" width="110" align="center">
-                <template #default="{ row }">{{ row.max_tokens ? row.max_tokens.toLocaleString() : '-' }}</template>
-              </el-table-column>
-              <el-table-column label="Vision" width="70" align="center">
-                <template #default="{ row }">
-                  <el-icon v-if="row.vision_support" color="#67c23a"><Check /></el-icon>
-                  <span v-else style="color:#ccc;">—</span>
-                </template>
-              </el-table-column>
-              <el-table-column label="Context" width="90" align="center">
-                <template #default="{ row }">{{ row.context_length ? row.context_length.toLocaleString() : '-' }}</template>
-              </el-table-column>
-              <el-table-column label="啟用" width="70" align="center">
-                <template #default="{ row }">
-                  <el-switch :model-value="row.enabled" @change="(v) => toggleEnabled(row, v)" />
-                </template>
-              </el-table-column>
-              <el-table-column label="預設" width="70" align="center">
-                <template #default="{ row }">
-                  <el-tag v-if="row.is_default" type="success" size="small">預設</el-tag>
-                  <el-button v-else size="small" plain @click="setDefault(row)">設為</el-button>
-                </template>
-              </el-table-column>
-              <el-table-column label="月度上限 (USD)" width="110" align="center">
-                <template #default="{ row }">
-                  <span v-if="row.monthly_quota_usd != null">${{ Number(row.monthly_quota_usd).toFixed(2) }}</span>
-                  <span v-else style="color:#ccc;">—</span>
-                </template>
-              </el-table-column>
-              <el-table-column label="操作" width="120" align="center">
-                <template #default="{ row }">
-                  <el-button size="small" type="primary" plain @click="openEdit(row)">編輯</el-button>
+            <div v-if="loading" style="padding:20px;text-align:center;"><el-icon class="is-loading" :size="22"><Loading /></el-icon></div>
+            <div v-else-if="models.filter(m => m.provider !== 'ollama').length === 0" class="model-empty">尚無雲端模型</div>
+            <div v-else class="model-cards">
+              <div v-for="row in models.filter(m => m.provider !== 'ollama')" :key="row.id" class="model-card">
+                <div class="mc-actions">
+                  <button class="mc-btn mc-edit" @click="openEdit(row)" title="編輯"><PenLine :size="13" :stroke-width="1.8" /></button>
                   <el-popconfirm title="刪除此模型？" @confirm="deleteModel(row.id)">
                     <template #reference>
-                      <el-button size="small" type="danger" plain>刪</el-button>
+                      <button class="mc-btn mc-del" title="刪除"><Trash2 :size="13" :stroke-width="1.8" /></button>
                     </template>
                   </el-popconfirm>
-                </template>
-              </el-table-column>
-            </el-table>
+                </div>
+                <div class="mc-top">
+                  <Cloud :size="20" :stroke-width="1.4" class="mc-icon mc-icon--cloud" />
+                  <div class="mc-name" :title="row.name">{{ row.name }}</div>
+                </div>
+                <div class="mc-tags">
+                  <el-tag size="small" :type="row.model_type === 'embedding' ? 'success' : row.model_type === 'rerank' ? 'warning' : ''">{{ row.model_type || 'chat' }}</el-tag>
+                  <el-tag v-if="row.vision_support" size="small" type="info">Vision</el-tag>
+                </div>
+                <div class="mc-meta">
+                  <span class="mc-meta-item">{{ PROVIDER_DEFS.find(p => p.key === row.provider)?.name || row.provider || '-' }}</span>
+                  <span v-if="row.context_length" class="mc-meta-item">{{ (row.context_length / 1000).toFixed(0) }}K ctx</span>
+                  <span v-if="row.max_tokens" class="mc-meta-item">{{ (row.max_tokens / 1000).toFixed(0) }}K out</span>
+                  <span v-if="row.monthly_quota_usd != null" class="mc-meta-item mc-quota">${{ Number(row.monthly_quota_usd).toFixed(0) }}/月</span>
+                </div>
+                <div class="mc-footer">
+                  <el-switch :model-value="row.enabled" size="small" @change="(v) => toggleEnabled(row, v)" />
+                  <el-tag v-if="row.is_default" type="success" size="small">預設</el-tag>
+                  <el-button v-else size="small" plain style="height:22px;padding:0 8px;font-size:11px;" @click="setDefault(row)">設為預設</el-button>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </template>
@@ -1196,7 +1142,7 @@
 import { ref, onMounted, onActivated, reactive, defineComponent, computed } from 'vue'
 import { useRoute } from 'vue-router'
 import { Refresh, Check, ArrowDown } from '@element-plus/icons-vue'
-import { Layers, FolderOpen, MessageSquare, Network, Puzzle, Settings, Dna, Cpu, Key, Sliders, HardDrive, Database, Bot, User, Link, BookOpen, Mail, Download, Cloud, FileText, RefreshCw } from 'lucide-vue-next'
+import { Layers, FolderOpen, MessageSquare, Network, Puzzle, Settings, Dna, Cpu, Key, Sliders, HardDrive, Database, Bot, User, Link, BookOpen, Mail, Download, Cloud, FileText, RefreshCw, PenLine, Trash2 } from 'lucide-vue-next'
 import { wikiApi, systemSettingsApi, agentSkillsApi, monitoringApi, authApi, usersApi, kbPermissionsApi, inviteApi, kbApi } from '../api/index.js'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuthStore } from '../stores/auth.js'
@@ -1570,9 +1516,11 @@ const MODEL_PRESETS = {
   ],
   anthropic: [
     { label: 'Claude 4 系列', options: [
-      { label: 'claude-opus-4-7',    value: 'claude-opus-4-7' },
-      { label: 'claude-sonnet-4-6',  value: 'claude-sonnet-4-6' },
-      { label: 'claude-haiku-4-5',   value: 'claude-haiku-4-5' },
+      { label: 'claude-opus-4-7',              value: 'claude-opus-4-7' },
+      { label: 'claude-sonnet-4-6',            value: 'claude-sonnet-4-6' },
+      { label: 'claude-opus-4-6',              value: 'claude-opus-4-6' },
+      { label: 'claude-opus-4-5-20251101',     value: 'claude-opus-4-5-20251101' },
+      { label: 'claude-haiku-4-5-20251001',    value: 'claude-haiku-4-5-20251001' },
     ]},
     { label: 'Claude 3.5 系列', options: [
       { label: 'claude-3-5-sonnet-20241022', value: 'claude-3-5-sonnet-20241022' },
@@ -1585,16 +1533,19 @@ const MODEL_PRESETS = {
     ]},
   ],
   openai: [
+    { label: 'GPT-4.1 系列', options: [
+      { label: 'gpt-4.1',        value: 'gpt-4.1' },
+      { label: 'gpt-4.1-mini',   value: 'gpt-4.1-mini' },
+      { label: 'gpt-4.1-nano',   value: 'gpt-4.1-nano' },
+    ]},
     { label: 'GPT-4o 系列', options: [
       { label: 'gpt-4o',       value: 'gpt-4o' },
       { label: 'gpt-4o-mini',  value: 'gpt-4o-mini' },
-      { label: 'gpt-4-turbo',  value: 'gpt-4-turbo' },
     ]},
     { label: 'o 系列（推理）', options: [
-      { label: 'o1',       value: 'o1' },
-      { label: 'o1-mini',  value: 'o1-mini' },
-      { label: 'o3-mini',  value: 'o3-mini' },
+      { label: 'o3',       value: 'o3' },
       { label: 'o4-mini',  value: 'o4-mini' },
+      { label: 'o3-mini',  value: 'o3-mini' },
     ]},
     { label: 'Embedding 模型', options: [
       { label: 'text-embedding-3-small', value: 'text-embedding-3-small' },
@@ -2739,6 +2690,89 @@ async function changePassword() {
 }
 .model-group-title:first-of-type {
   margin-top: 0;
+}
+.model-empty {
+  padding: 18px 0;
+  text-align: center;
+  color: #b0b8c1;
+  font-size: 13px;
+}
+/* 模型卡片 Grid */
+.model-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 14px;
+  margin-bottom: 4px;
+}
+.model-card {
+  position: relative;
+  background: #fff;
+  border: 1px solid #e4e8ef;
+  border-radius: 12px;
+  padding: 14px 14px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  transition: box-shadow 0.18s, border-color 0.18s;
+}
+.model-card:hover {
+  border-color: #c0ccda;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.08);
+}
+.mc-actions {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.model-card:hover .mc-actions { opacity: 1; }
+.mc-btn {
+  display: flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px;
+  border: none; border-radius: 6px;
+  background: #f0f2f5; cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.mc-edit { color: #606266; }
+.mc-edit:hover { background: #e8f0fe; color: #409eff; }
+.mc-del { color: #909399; }
+.mc-del:hover { background: #fff0f0; color: #f56c6c; }
+.mc-top {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding-right: 40px;
+}
+.mc-icon { color: #6c7a8d; flex-shrink: 0; margin-top: 1px; }
+.mc-icon--cloud { color: #5b8df5; }
+.mc-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: #1e293b;
+  line-height: 1.35;
+  word-break: break-all;
+}
+.mc-tags { display: flex; gap: 5px; flex-wrap: wrap; }
+.mc-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+}
+.mc-meta-item {
+  font-size: 11px;
+  color: #8492a6;
+}
+.mc-quota { color: #e6a23c; }
+.mc-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 2px;
+  padding-top: 8px;
+  border-top: 1px solid #f1f5f9;
 }
 
 .advanced-toggle {

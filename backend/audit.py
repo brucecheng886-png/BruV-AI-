@@ -34,6 +34,25 @@ _SKIP_PREFIXES = (
 def _action_from_request(method: str, path: str) -> str:
     """將 method + path 對應成可讀 action 名稱"""
     path_lower = path.lower()
+    # ── 共享硬碟資料夾 ────────────────────────────────
+    if "folder" in path_lower:
+        if method == "DELETE":
+            if "document" in path_lower:
+                return "FOLDER_REMOVE_DOCUMENT"
+            if "permission" in path_lower:
+                return "FOLDER_REVOKE_PERMISSION"
+            return "DELETE_FOLDER"
+        if method == "POST":
+            if "document" in path_lower:
+                return "FOLDER_ADD_DOCUMENT"
+            if "permission" in path_lower:
+                return "FOLDER_GRANT_PERMISSION"
+            if "move" in path_lower:
+                return "FOLDER_MOVE"
+            return "CREATE_FOLDER"
+        if method == "PUT":
+            return "UPDATE_FOLDER"
+
     if method == "DELETE":
         if "document" in path_lower:
             return "DELETE_DOCUMENT"
